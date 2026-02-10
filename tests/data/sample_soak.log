@@ -1,0 +1,4 @@
+2026-02-10 10:00:00 INFO starting soak loop
+2026-02-10 10:00:03 Error: failed to connect ECONNREFUSED
+2026-02-10 10:00:10 PASSED test_capture_flow
+E   AssertionError: expected 1 got 0

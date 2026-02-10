@@ -1,0 +1,20 @@
+[build-system]
+requires = ["hatchling>=1.24.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "wicap-assistant"
+version = "0.1.0"
+description = "Local WICAP assistant for Codex log ingest and searchable triage"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+wicap-assist = "wicap_assist.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/wicap_assist"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
