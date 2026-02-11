@@ -119,7 +119,7 @@ Data is stored in `./data/assistant.db`.
 - `wicap-assist fix-lineage "<signature>" [--limit N] [--json]`
 - `wicap-assist confidence-audit [--limit N] [--json]`
 - `wicap-assist memory-maintenance [--lookback-days N] [--stale-days N] [--max-decision-rows N] [--max-session-rows N] [--prune-stale] [--output <file>] [--json]`
-- `wicap-assist rollout-gates [--lookback-days N] [--min-shadow-samples N] [--min-shadow-agreement-rate F] [--min-shadow-success-rate F] [--min-reward-avg F] [--max-autonomous-escalation-rate F] [--min-autonomous-runs N] [--max-rollback-failures N] [--json]`
+- `wicap-assist rollout-gates [--lookback-days N] [--min-shadow-samples N] [--min-shadow-agreement-rate F] [--min-shadow-success-rate F] [--min-reward-avg F] [--max-autonomous-escalation-rate F] [--min-autonomous-runs N] [--max-rollback-failures N] [--history-file <file>] [--required-consecutive-passes N] [--enforce] [--json]`
 - `wicap-assist soak-run [--duration-minutes N] [--playwright-interval-minutes N] [--baseline-path <file>] [--baseline-update|--no-baseline-update] [--observe-interval-seconds N] [--control-mode monitor|observe|assist|autonomous] [--control-check-threshold N] [--control-recover-threshold N] [--control-max-recover-attempts N] [--control-action-cooldown-cycles N] [--require-runtime-contract|--no-require-runtime-contract] [--runtime-contract-path <file>] [--stop-on-escalation|--no-stop-on-escalation] [--dry-run]`
 - `wicap-assist live [--interval N] [--once] [--control-mode monitor|observe|assist|autonomous] [--control-check-threshold N] [--control-recover-threshold N] [--control-max-recover-attempts N] [--control-action-cooldown-cycles N] [--stop-on-escalation]`
 - `wicap-assist agent [--control-mode monitor|observe|assist|autonomous] [--observe-interval-seconds N]`
@@ -151,4 +151,5 @@ Data is stored in `./data/assistant.db`.
 python -m compileall src
 python -m pytest -q
 ./scripts/smoke_matrix.sh
+./scripts/live_testing_gate.sh
 ```

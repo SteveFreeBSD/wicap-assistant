@@ -31,7 +31,7 @@
 - Implemented relapse detection for failure signatures reappearing after time gaps.
 - Standardized shared join keys (normalized fingerprint, time window, source type tokens).
 - Linked CHANGELOG entries to failure evidence for release-aware correlation.
-- Remaining: consolidate duplicated evidence primitives into one shared core to eliminate drift across modules.
+- Remaining: periodic drift audit only; shared evidence primitives are centralized and regression-tested.
 
 ## Phase 6 – Antigravity and Extended Adapters (Completed)
 - Implemented Antigravity conversation artifact ingestion (task.md, walkthrough.md, implementation_plan.md).
@@ -54,7 +54,7 @@
 ## Phase 9 – Plane-Separated Agentic Control (In Progress)
 - Implemented OpenClaw-style runtime/tool-policy/elevated plane separation with deny-precedence evaluation in actuator flow.
 - Implemented cross-repo control intent policy gate (`wicap.control.v1`) with accept/reject audit metadata in WiCAP intake surfaces.
-- Remaining: expand autonomous rollout gates, shadow mode quality thresholds, and rollback budget SLO enforcement.
+- Implemented autonomous rollout gate evaluation with shadow/risk/rollback SLO checks and promotion readiness history.
 
 ## Phase 10 – Memory Tiers and Learning (In Progress)
 - Implemented episodic memory for action/outcome timelines (`episodes`, `episode_events`, `episode_outcomes`) with additive migration safety.
@@ -65,7 +65,7 @@
 - Implemented deterministic reward modeling + outcome labels for decision feature persistence.
 - Implemented shadow quality gate metrics (sample/agreement/success thresholds) with telemetry emission in live/soak loops.
 - Implemented scheduled memory-maintenance job baseline with stale working-memory pruning and reflection reports.
-- Remaining: guarded promotion policy for any future learned-action execution changes.
+- Implemented guarded promotion policy via rollout gate history and consecutive-pass readiness checks.
 
 ## Phase 11 – WiCAP-Native Network Intelligence (In Progress)
 - Implemented ingest adapter for WiCAP-native network envelopes and integrated network categories into recommendation/playbook/rollup/guardian evidence paths.

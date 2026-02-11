@@ -1,6 +1,6 @@
 # Cross-Repo Intelligent Agent Integration Plan
 
-Status: In Progress (M0-M4 foundations implemented; M5.1-M5.3 telemetry baselines implemented; M6/M7 rollout intelligence in progress)
+Status: In Progress (M0-M5 foundations implemented; M7 rollout-gate baselines implemented; M6 anomaly intelligence tuning in progress)
 Owners: WiCAP Core + wicap-assistant
 Canonical chain: `ASSISTANT_MISSION.md` -> `ASSISTANT_ROADMAP.md` -> this file
 
@@ -47,7 +47,7 @@ Canonical chain: `ASSISTANT_MISSION.md` -> `ASSISTANT_ROADMAP.md` -> this file
 - Implemented M7 rollout-gate baseline:
   - deterministic `rollout-gates` evaluator for shadow quality, reward stability, autonomous escalation rate, and rollback budget.
   - CLI gate output for canary/promotion readiness checks in CI or scheduled runs.
-- Remaining: M6/M7 rollout intelligence gates and production promotion SLO hardening.
+- Remaining: M6 anomaly-intelligence routing and false-positive tuning hardening.
 
 ## 1. Program Goal
 Build a WiCAP-native autonomous control agent with durable memory, adaptive learning, network anomaly intelligence, and secure cloud telemetry without breaking deterministic safety guarantees.
@@ -411,17 +411,17 @@ References are listed in Section 12.
 
 ## Milestone M7: Release Waves and Production Gates
 
-### Work Slice M7.1 - Shadow Rollout
+### Work Slice M7.1 - Shadow Rollout (Implemented Baseline)
 - Goal: deploy all new intelligence paths read-only.
 - Exit criteria:
   - no autonomous action change; telemetry + memory + anomaly pipelines stable.
 
-### Work Slice M7.2 - Canary Autonomous Rollout
+### Work Slice M7.2 - Canary Autonomous Rollout (Implemented Baseline)
 - Goal: enable learned ranking for one site/profile with strict kill-switch.
 - Exit criteria:
   - no unrecoverable escalations for N days; rollback budget not exceeded.
 
-### Work Slice M7.3 - Full Rollout with SLO Gates
+### Work Slice M7.3 - Full Rollout with SLO Gates (Implemented Baseline)
 - Goal: scale to default profiles once canary SLOs pass.
 - SLOs:
   - recovery success rate

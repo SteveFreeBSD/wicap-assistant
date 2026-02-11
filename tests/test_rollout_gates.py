@@ -8,6 +8,7 @@ from wicap_assist.db import (
     update_control_session,
 )
 from wicap_assist.rollout_gates import evaluate_rollout_gates
+from wicap_assist.rollout_gates import evaluate_promotion_readiness
 
 
 def test_evaluate_rollout_gates_passes_with_healthy_metrics(tmp_path) -> None:
@@ -90,3 +91,22 @@ def test_evaluate_rollout_gates_fails_with_insufficient_shadow_data(tmp_path) ->
         assert gates["autonomous_escalation"]["status"] == "insufficient_data"
     finally:
         conn.close()
+
+
+def test_evaluate_promotion_readiness_requires_consecutive_passes() -> None:
+    history = [
+        {"generated_ts": "2026-02-10T00:00:00+00:00", "overall_pass": True},
+        {"generated_ts": "2026-02-11T00:00:00+00:00", "overall_pass": True},
+    ]
+    report = evaluate_promotion_readiness(history, required_consecutive_passes=2)
+    assert bool(report["ready"]) is True
+    assert int(report["consecutive_passes"]) == 2
+
+    history_with_fail = [
+        {"generated_ts": "2026-02-10T00:00:00+00:00", "overall_pass": True},
+        {"generated_ts": "2026-02-11T00:00:00+00:00", "overall_pass": False},
+        {"generated_ts": "2026-02-12T00:00:00+00:00", "overall_pass": True},
+    ]
+    report2 = evaluate_promotion_readiness(history_with_fail, required_consecutive_passes=2)
+    assert bool(report2["ready"]) is False
+    assert int(report2["consecutive_passes"]) == 1

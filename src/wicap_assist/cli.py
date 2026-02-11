@@ -58,6 +58,11 @@ from wicap_assist.guardian import run_guardian
 from wicap_assist.playbooks import generate_playbooks
 from wicap_assist.recommend import build_recommendation, recommendation_to_json
 from wicap_assist.rollout_gates import evaluate_rollout_gates
+from wicap_assist.rollout_gates import (
+    append_rollout_gate_history,
+    evaluate_promotion_readiness,
+    load_rollout_gate_history,
+)
 from wicap_assist.runtime_contract import (
     format_runtime_contract_report_text,
     run_runtime_contract_check,
@@ -764,6 +769,23 @@ def build_parser() -> argparse.ArgumentParser:
     rollout_parser.add_argument("--max-autonomous-escalation-rate", type=float, default=0.20)
     rollout_parser.add_argument("--min-autonomous-runs", type=int, default=5)
     rollout_parser.add_argument("--max-rollback-failures", type=int, default=3)
+    rollout_parser.add_argument(
+        "--history-file",
+        type=Path,
+        default=Path("data/reports/rollout_gates_history.jsonl"),
+        help="Append gate snapshots to JSONL history for promotion readiness checks",
+    )
+    rollout_parser.add_argument(
+        "--required-consecutive-passes",
+        type=int,
+        default=2,
+        help="Consecutive overall gate passes required for promotion readiness",
+    )
+    rollout_parser.add_argument(
+        "--enforce",
+        action="store_true",
+        help="Exit non-zero if promotion readiness is not met",
+    )
     rollout_parser.add_argument("--json", action="store_true", dest="as_json", help="Emit JSON output")
 
     soak_run_parser = subparsers.add_parser("soak-run", help="Run supervised WICAP soak and auto-capture context")
@@ -1160,13 +1182,28 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         finally:
             conn.close()
+        history_file = Path(args.history_file)
+        append_rollout_gate_history(history_file, report)
+        history = load_rollout_gate_history(history_file)
+        promotion = evaluate_promotion_readiness(
+            history,
+            required_consecutive_passes=max(1, int(args.required_consecutive_passes)),
+        )
+        report["history_file"] = str(history_file)
+        report["history_count"] = int(len(history))
+        report["promotion"] = promotion
+        if bool(args.enforce) and not bool(promotion.get("ready")):
+            exit_code = 2
+        else:
+            exit_code = 0
         if args.as_json:
             import json as _json
 
             print(_json.dumps(report, sort_keys=True))
         else:
             status = "PASS" if bool(report.get("overall_pass")) else "FAIL"
-            print(f"Rollout gates: {status}")
+            promotion_status = "READY" if bool(promotion.get("ready")) else "NOT_READY"
+            print(f"Rollout gates: {status} (promotion={promotion_status})")
             gates = report.get("gates", {})
             if isinstance(gates, dict):
                 for name in sorted(gates.keys()):
@@ -1174,7 +1211,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                     if not isinstance(value, dict):
                         continue
                     print(f"- {name}: {value.get('status')} (pass={bool(value.get('pass'))})")
-        return 0
+            print(
+                "- promotion: "
+                f"consecutive_passes={promotion.get('consecutive_passes')} "
+                f"required={promotion.get('required_consecutive_passes')}"
+            )
+        return int(exit_code)
 
     if args.command == "soak-run":
         return _run_soak_run(

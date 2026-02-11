@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 import json
+from pathlib import Path
 import sqlite3
 from typing import Any
 
@@ -190,4 +191,52 @@ def evaluate_rollout_gates(
         "lookback_days": int(max(1, int(lookback_days))),
         "overall_pass": bool(overall_pass),
         "gates": gates,
+    }
+
+
+def load_rollout_gate_history(path: Path) -> list[dict[str, Any]]:
+    target = Path(path)
+    if not target.exists():
+        return []
+    entries: list[dict[str, Any]] = []
+    for raw in target.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict):
+            entries.append(payload)
+    return entries
+
+
+def append_rollout_gate_history(path: Path, payload: dict[str, Any]) -> Path:
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with target.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(payload, sort_keys=True) + "\n")
+    return target
+
+
+def evaluate_promotion_readiness(
+    history: list[dict[str, Any]],
+    *,
+    required_consecutive_passes: int = 2,
+) -> dict[str, Any]:
+    required = max(1, int(required_consecutive_passes))
+    consecutive = 0
+    for entry in reversed(history):
+        if bool(entry.get("overall_pass", False)):
+            consecutive += 1
+            if consecutive >= required:
+                break
+            continue
+        break
+    ready = consecutive >= required
+    return {
+        "required_consecutive_passes": int(required),
+        "consecutive_passes": int(consecutive),
+        "ready": bool(ready),
     }

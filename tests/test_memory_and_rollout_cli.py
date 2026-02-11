@@ -28,11 +28,14 @@ def test_memory_maintenance_cli_writes_report_json(tmp_path: Path, capsys) -> No
 
 def test_rollout_gates_cli_json_output(tmp_path: Path, capsys) -> None:
     db_path = tmp_path / "assistant.db"
+    history = tmp_path / "rollout_history.jsonl"
     rc = main(
         [
             "--db",
             str(db_path),
             "rollout-gates",
+            "--history-file",
+            str(history),
             "--json",
         ]
     )
@@ -40,3 +43,24 @@ def test_rollout_gates_cli_json_output(tmp_path: Path, capsys) -> None:
     payload = json.loads(capsys.readouterr().out.strip())
     assert "overall_pass" in payload
     assert "gates" in payload
+    assert "promotion" in payload
+    assert history.exists()
+
+
+def test_rollout_gates_cli_enforce_requires_promotion_readiness(tmp_path: Path) -> None:
+    db_path = tmp_path / "assistant.db"
+    history = tmp_path / "rollout_history.jsonl"
+    rc = main(
+        [
+            "--db",
+            str(db_path),
+            "rollout-gates",
+            "--history-file",
+            str(history),
+            "--required-consecutive-passes",
+            "2",
+            "--enforce",
+            "--json",
+        ]
+    )
+    assert rc == 2
