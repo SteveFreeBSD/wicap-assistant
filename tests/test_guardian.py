@@ -206,3 +206,45 @@ def test_guardian_includes_verification_track_record(tmp_path: Path) -> None:
 
     conn.close()
 
+
+def test_guardian_includes_anomaly_route_context_for_network_alerts(tmp_path: Path) -> None:
+    conn = connect_db(tmp_path / "assistant.db")
+    playbooks_dir = tmp_path / "playbooks"
+    playbooks_dir.mkdir()
+    signature = normalize_signature("Error: deauth spike anomaly detected")
+    (playbooks_dir / "network-anomaly.md").write_text(
+        "\n".join(
+            [
+                "- Category: error",
+                f"- Signature: {signature}",
+                "## Fix steps",
+                "1. Run `python scripts/check_wicap_status.py --local-only`.",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    playbooks = load_playbook_entries(playbooks_dir)
+
+    log_path = tmp_path / "network.log"
+    log_path.write_text("Error: deauth spike anomaly detected\n", encoding="utf-8")
+
+    state = GuardianState()
+    alerts = scan_guardian_once(
+        conn,
+        state=state,
+        path_specs=[str(log_path)],
+        playbooks=playbooks,
+        start_at_end_for_new=False,
+    )
+    assert len(alerts) == 1
+    alert = alerts[0]
+    assert alert.category == "error"
+    assert alert.anomaly_class == "wifi_disruption"
+    assert "status_check" in alert.anomaly_action_ladder
+    assert alert.anomaly_verification_ladder
+
+    payload = alert.to_dict()
+    route = payload.get("anomaly_route")
+    assert isinstance(route, dict)
+    assert route.get("class_id") == "wifi_disruption"
+    conn.close()

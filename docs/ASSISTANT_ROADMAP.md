@@ -72,8 +72,8 @@
 - Implemented WiCAP-side event normalization + Zeek conn and Suricata EVE compatibility exporters for contract-aligned flow semantics.
 - Implemented ingestion support for `wicap.anomaly.v1` scored anomaly stream artifacts.
 - Implemented ingestion support for `wicap.feedback.v1` anomaly feedback artifacts.
-- Correlate anomaly classes to control ladders and verification playbooks.
-- Close false-positive loops with bounded operator feedback and deterministic recalibration.
+- Implemented deterministic anomaly-class routing to control/playbook verification ladders in guardian, soak control, and recommendation paths.
+- Implemented bounded false-positive calibration from feedback artifacts (`network_anomaly_feedback`) into anomaly recommendation confidence.
 
 ## Phase 12 – OTLP Telemetry and Observability (In Progress)
 - Implemented provider-neutral OTLP-aligned traces/metrics/log payload emission for live and supervised soak control cycles.

@@ -175,6 +175,8 @@ def test_network_anomaly_signature_is_considered_for_recommendation(tmp_path: Pa
     payload = build_recommendation(conn, snippet)
     assert payload["input"] == snippet
     assert "confidence" in payload
+    assert "anomaly response ladder" in str(payload["recommended_action"]).lower()
+    assert payload["verification_steps"]
     conn.close()
 
 

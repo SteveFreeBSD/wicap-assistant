@@ -22,7 +22,7 @@ def probe_http_health(
                 "status_code": status,
                 "error": None,
             }
-    except URLError as exc:
+    except (URLError, TimeoutError, OSError) as exc:
         return {
             "url": url,
             "ok": False,

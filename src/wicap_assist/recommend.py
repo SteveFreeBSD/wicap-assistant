@@ -10,6 +10,7 @@ import re
 import sqlite3
 from typing import Any
 
+from wicap_assist.anomaly_routing import action_to_runbook_step, query_feedback_calibration, route_for_anomaly
 from wicap_assist.git_context import (
     build_git_context,
     load_antigravity_git_evidence,
@@ -350,6 +351,17 @@ def build_recommendation(conn: sqlite3.Connection, target: str) -> dict[str, Any
         memory_episodes = context_memory_episodes
         memory_action = _memory_recommended_action(memory_episodes)
 
+    anomaly_route: dict[str, Any] | None = None
+    if context.category in {"network_anomaly", "network_flow"}:
+        attack_type = context.signature.split("|", 1)[0].strip().lower() if "|" in context.signature else None
+        feedback = query_feedback_calibration(conn, attack_type=attack_type)
+        anomaly_route = route_for_anomaly(
+            signature=context.signature,
+            category=context.category,
+            attack_type=attack_type,
+            feedback=feedback,
+        )
+
     related_rows = _query_related_signals(conn, context.signature)
     evidence = _related_evidence(related_rows)
     related_playbooks = _parse_playbooks(related_rows)
@@ -423,6 +435,29 @@ def build_recommendation(conn: sqlite3.Connection, target: str) -> dict[str, Any
             payload["recommended_action"] = memory_action
             payload["confidence"] = _memory_confidence(memory_episodes)
             payload["risk_notes"] = "memory-based recovery suggestion; verify runtime state before execution"
+        if anomaly_route:
+            action_ladder = anomaly_route.get("action_ladder", [])
+            if isinstance(action_ladder, list) and action_ladder:
+                primary_step = action_to_runbook_step(str(action_ladder[0]))
+                payload["recommended_action"] = (
+                    f"Apply anomaly response ladder ({anomaly_route.get('class_id')}): {primary_step}"
+                )
+                base_conf = max(float(payload.get("confidence", 0.0)), 0.2)
+                scale = float((anomaly_route.get("feedback") or {}).get("confidence_scale", 1.0))
+                payload["confidence"] = round(max(0.0, min(1.0, base_conf * scale)), 3)
+            verify = anomaly_route.get("verification_ladder", [])
+            if isinstance(verify, list) and verify:
+                payload["verification_priority"] = _dedupe_keep_order([str(item) for item in verify if str(item).strip()])[:5]
+                payload["verification_steps"] = list(payload["verification_priority"])
+                payload["verification_step_safety"] = [
+                    {"step": step, "safety": classify_verification_step(step)}
+                    for step in payload["verification_steps"]
+                ]
+            feedback = anomaly_route.get("feedback", {})
+            if isinstance(feedback, dict):
+                status = str(feedback.get("status", "")).strip()
+                scale = feedback.get("confidence_scale", 1.0)
+                payload["risk_notes"] = f"anomaly feedback calibration status={status} scale={scale}"
         return payload
 
     if evidence["fix_outcomes"]:
@@ -468,6 +503,44 @@ def build_recommendation(conn: sqlite3.Connection, target: str) -> dict[str, Any
         risk_notes = "same failure recurred after a prior fix; validate root cause before rollout"
     elif context.count > 5:
         risk_notes = "high recurrence observed in historical logs"
+
+    if anomaly_route:
+        action_ladder = anomaly_route.get("action_ladder", [])
+        if (
+            isinstance(action_ladder, list)
+            and action_ladder
+            and (
+                not recommended_action
+                or recommended_action == "insufficient historical evidence"
+                or recommended_action.startswith("Run historical harness recovery path:")
+            )
+        ):
+            recommended_action = (
+                f"Apply anomaly response ladder ({anomaly_route.get('class_id')}): "
+                f"{action_to_runbook_step(str(action_ladder[0]))}"
+            )
+        verify = anomaly_route.get("verification_ladder", [])
+        if isinstance(verify, list) and verify:
+            verification_priority = _dedupe_keep_order(
+                [str(item) for item in verify if str(item).strip()] + verification_priority
+            )[:5]
+            verification_steps = verification_priority[:5]
+            verification_step_safety = [
+                {
+                    "step": step,
+                    "safety": classify_verification_step(step),
+                }
+                for step in verification_steps
+            ]
+        feedback = anomaly_route.get("feedback", {})
+        scale = 1.0
+        if isinstance(feedback, dict):
+            scale = float(feedback.get("confidence_scale", 1.0) or 1.0)
+            status = str(feedback.get("status", "")).strip()
+            if status:
+                risk_line = f"anomaly feedback calibration status={status} scale={scale}"
+                risk_notes = f"{risk_notes}; {risk_line}".strip("; ") if risk_notes else risk_line
+        confidence = round(max(0.0, min(1.0, float(confidence) * float(scale))), 3)
 
     return {
         "input": target,

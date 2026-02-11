@@ -9,6 +9,7 @@ import subprocess
 from typing import Any, Callable
 
 from wicap_assist.actuators import run_allowlisted_action
+from wicap_assist.anomaly_routing import route_for_anomaly
 from wicap_assist.util.time import utc_now_iso
 
 ControlRunner = Callable[..., subprocess.CompletedProcess[str]]
@@ -159,6 +160,7 @@ class ControlPolicy:
     rollback_max_attempts: int | None = None
     profile_name: str = field(default="", init=False)
     _service_state: dict[str, dict[str, int]] = field(default_factory=dict, init=False)
+    _anomaly_state: dict[str, int] = field(default_factory=dict, init=False)
     _cycle: int = field(default=0, init=False)
 
     def __post_init__(self) -> None:
@@ -405,6 +407,34 @@ class ControlPolicy:
 
         max_streak = max((int(self._state_for(name)["down_streak"]) for name in down_set), default=0)
         events: list[dict[str, Any]] = []
+        anomaly_routes: list[dict[str, Any]] = []
+        top_signatures = observation.get("top_signatures")
+        if isinstance(top_signatures, list):
+            for item in top_signatures:
+                if not isinstance(item, dict):
+                    continue
+                category = str(item.get("category", "")).strip()
+                if category not in {"network_anomaly", "network_flow"}:
+                    continue
+                signature = str(item.get("signature", "")).strip()
+                if not signature:
+                    continue
+                attack_type_value = item.get("attack_type")
+                attack_type = str(attack_type_value).strip().lower() if isinstance(attack_type_value, str) else None
+                if not attack_type and "|" in signature:
+                    attack_type = signature.split("|", 1)[0].strip().lower()
+                anomaly_routes.append(
+                    {
+                        "category": category,
+                        "signature": signature,
+                        "route": route_for_anomaly(
+                            signature=signature,
+                            category=category,
+                            attack_type=attack_type,
+                        ),
+                    }
+                )
+
         events.append(
             {
                 "ts": ts,
@@ -417,9 +447,69 @@ class ControlPolicy:
                     "cycle": int(self._cycle),
                     "mode": self.mode,
                     "profile": self.profile_name,
+                    "anomaly_routes": [item.get("route", {}) for item in anomaly_routes],
                 },
             }
         )
+
+        for item in anomaly_routes:
+            route = item.get("route")
+            if not isinstance(route, dict):
+                continue
+            class_id = str(route.get("class_id", "")).strip()
+            signature = str(item.get("signature", "")).strip()
+            category = str(item.get("category", "")).strip()
+            if not class_id or not signature:
+                continue
+            route_key = f"{class_id}|{signature}"
+            events.append(
+                {
+                    "ts": ts,
+                    "decision": "anomaly_route",
+                    "action": None,
+                    "status": "planned",
+                    "detail_json": {
+                        "cycle": int(self._cycle),
+                        "category": category,
+                        "signature": signature,
+                        "anomaly_class": class_id,
+                        "action_ladder": [str(value) for value in route.get("action_ladder", []) if str(value).strip()],
+                        "verification_ladder": [
+                            str(value) for value in route.get("verification_ladder", []) if str(value).strip()
+                        ],
+                        "feedback": route.get("feedback", {}),
+                    },
+                }
+            )
+            if self.mode not in {"assist", "autonomous"}:
+                continue
+            action_ladder = route.get("action_ladder", [])
+            if not isinstance(action_ladder, list) or not action_ladder:
+                continue
+            primary_action = str(action_ladder[0]).strip().lower()
+            if primary_action != "status_check":
+                continue
+            cooldown_until = int(self._anomaly_state.get(route_key, 0))
+            if int(self._cycle) < cooldown_until:
+                continue
+            status, command, detail = self._run_allowlisted("status_check")
+            self._anomaly_state[route_key] = int(self._cycle + max(1, self.action_cooldown_cycles))
+            events.append(
+                {
+                    "ts": ts,
+                    "decision": "anomaly_verify",
+                    "action": "status_check",
+                    "status": status,
+                    "detail_json": {
+                        "cycle": int(self._cycle),
+                        "category": category,
+                        "signature": signature,
+                        "anomaly_class": class_id,
+                        "command": command,
+                        "detail": detail,
+                    },
+                }
+            )
 
         if not down_services:
             return events

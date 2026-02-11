@@ -58,6 +58,7 @@ _DOCKER_FAIL_RE = re.compile(
 
 _ERROR_SPIKE_THRESHOLD = 8
 _LIVE_RESUME_WINDOW_SECONDS = 180
+_NETWORK_SIGNATURE_LOOKBACK_MINUTES = 30
 
 
 def _utc_now_iso() -> str:
@@ -155,6 +156,65 @@ def extract_top_signatures(service_logs: dict[str, list[str]], *, limit: int = 3
     return top
 
 
+def _recent_network_top_signatures(
+    conn: sqlite3.Connection,
+    *,
+    limit: int = 2,
+    lookback_minutes: int = _NETWORK_SIGNATURE_LOOKBACK_MINUTES,
+) -> list[dict[str, Any]]:
+    cutoff = datetime.now(timezone.utc).timestamp() - max(1, int(lookback_minutes)) * 60
+    rows = conn.execute(
+        """
+        SELECT category, snippet, ts_text, extra_json
+        FROM log_events
+        WHERE category IN ('network_anomaly', 'network_flow')
+        ORDER BY id DESC
+        LIMIT 2000
+        """
+    ).fetchall()
+
+    buckets: dict[tuple[str, str], dict[str, Any]] = {}
+    for row in rows:
+        ts_value = _parse_iso_utc(row["ts_text"])
+        if ts_value is not None and ts_value.timestamp() < cutoff:
+            continue
+        category = str(row["category"]).strip()
+        snippet = str(row["snippet"]).strip()
+        signature = normalize_signature(snippet)
+        if not signature:
+            continue
+        key = (category, signature)
+        bucket = buckets.setdefault(
+            key,
+            {
+                "category": category,
+                "signature": signature,
+                "count": 0,
+                "service": "network-intel",
+                "example": to_snippet(snippet, max_len=200),
+                "attack_type": None,
+            },
+        )
+        bucket["count"] = int(bucket["count"]) + 1
+
+        extra_raw = row["extra_json"]
+        if isinstance(extra_raw, str) and extra_raw.strip():
+            try:
+                extra = json.loads(extra_raw)
+            except json.JSONDecodeError:
+                extra = {}
+            if isinstance(extra, dict):
+                attack_type = extra.get("attack_type")
+                if isinstance(attack_type, str) and attack_type.strip():
+                    bucket["attack_type"] = attack_type.strip().lower()
+
+    ranked = sorted(
+        buckets.values(),
+        key=lambda item: (-int(item["count"]), str(item["category"]), str(item["signature"])),
+    )
+    return ranked[: max(1, int(limit))]
+
+
 def _match_playbook(
     entry: dict[str, Any],
     playbooks: dict[tuple[str, str], PlaybookEntry],
@@ -250,7 +310,40 @@ def collect_live_cycle(
     if not isinstance(service_logs, dict):
         service_logs = {}
 
-    top_signatures = extract_top_signatures(service_logs, limit=3)
+    service_top_signatures = extract_top_signatures(service_logs, limit=3)
+    network_top_signatures = _recent_network_top_signatures(conn, limit=2)
+    merged: dict[tuple[str, str], dict[str, Any]] = {}
+    for entry in [*service_top_signatures, *network_top_signatures]:
+        if not isinstance(entry, dict):
+            continue
+        category = str(entry.get("category", "")).strip()
+        signature = str(entry.get("signature", "")).strip()
+        if not category or not signature:
+            continue
+        key = (category, signature)
+        bucket = merged.setdefault(
+            key,
+            {
+                "category": category,
+                "signature": signature,
+                "count": 0,
+                "service": str(entry.get("service", "")),
+                "example": str(entry.get("example", "")),
+            },
+        )
+        bucket["count"] = int(bucket.get("count", 0)) + int(entry.get("count", 0) or 0)
+        if not bucket.get("service"):
+            bucket["service"] = str(entry.get("service", ""))
+        if not bucket.get("example"):
+            bucket["example"] = str(entry.get("example", ""))
+        attack_type = entry.get("attack_type")
+        if isinstance(attack_type, str) and attack_type.strip():
+            bucket["attack_type"] = attack_type.strip().lower()
+
+    top_signatures = sorted(
+        merged.values(),
+        key=lambda item: (-int(item.get("count", 0)), str(item.get("category", "")), str(item.get("signature", ""))),
+    )[:5]
     playbook_map = load_playbook_entries(playbooks_dir or default_playbooks_dir())
 
     recommendations: list[dict[str, Any]] = []

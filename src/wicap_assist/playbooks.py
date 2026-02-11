@@ -9,6 +9,7 @@ import sqlite3
 from typing import Any, Callable
 
 from wicap_assist.config import wicap_repo_root
+from wicap_assist.anomaly_routing import action_to_runbook_step, route_for_anomaly
 from wicap_assist.evidence_query import where_like
 from wicap_assist.harness_match import find_relevant_harness_scripts
 from wicap_assist.ingest.git_history import GitCommit, compute_window_from_mtimes, load_git_commits
@@ -270,10 +271,47 @@ def _generic_check_commands(category: str) -> list[str]:
     ]
 
 
+def _anomaly_attack_type(cluster: dict[str, Any]) -> str | None:
+    signature = str(cluster.get("signature", "")).strip()
+    if "|" not in signature:
+        return None
+    candidate = signature.split("|", 1)[0].strip().lower()
+    if not candidate:
+        return None
+    if re.fullmatch(r"[a-z0-9_.-]+", candidate):
+        return candidate
+    return None
+
+
+def _anomaly_route(cluster: dict[str, Any]) -> dict[str, Any] | None:
+    category = str(cluster.get("category", "")).strip()
+    if category not in {"network_anomaly", "network_flow"}:
+        return None
+    return route_for_anomaly(
+        signature=str(cluster.get("signature", "")),
+        category=category,
+        attack_type=_anomaly_attack_type(cluster),
+    )
+
+
 def _build_quick_checks(cluster: dict[str, Any], sessions: list[dict[str, Any]]) -> list[str]:
     checks: list[str] = []
     seen: set[str] = set()
     commands = _preferred_commands(sessions)
+    anomaly_route = _anomaly_route(cluster)
+
+    if anomaly_route is not None:
+        for verify in anomaly_route.get("verification_ladder", []):
+            command = str(verify).strip()
+            if not command:
+                continue
+            key = command.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            checks.append(command)
+            if len(checks) >= 5:
+                return checks[:5]
 
     for command in commands:
         if len(checks) >= 5:
@@ -307,6 +345,20 @@ def _build_fix_steps(cluster: dict[str, Any], sessions: list[dict[str, Any]]) ->
     seen_steps: set[str] = set()
     commands = _preferred_commands(sessions)
     outcomes = _collect_signal_values(sessions, "outcomes")
+    anomaly_route = _anomaly_route(cluster)
+
+    if anomaly_route is not None:
+        for action in anomaly_route.get("action_ladder", []):
+            command = action_to_runbook_step(str(action))
+            if not command:
+                continue
+            line = f"Run `{command}`."
+            if line in seen_steps:
+                continue
+            seen_steps.add(line)
+            steps.append(line)
+            if len(steps) >= 8:
+                return steps[:8]
 
     for command in commands:
         if len(steps) >= 8:

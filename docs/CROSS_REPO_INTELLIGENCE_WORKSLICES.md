@@ -1,6 +1,6 @@
 # Cross-Repo Intelligent Agent Integration Plan
 
-Status: In Progress (M0-M5 foundations implemented; M7 rollout-gate baselines implemented; M6 anomaly intelligence tuning in progress)
+Status: In Progress (M0-M7 implemented baselines; anomaly-intelligence production tuning remains deployment-specific)
 Owners: WiCAP Core + wicap-assistant
 Canonical chain: `ASSISTANT_MISSION.md` -> `ASSISTANT_ROADMAP.md` -> this file
 
@@ -47,7 +47,13 @@ Canonical chain: `ASSISTANT_MISSION.md` -> `ASSISTANT_ROADMAP.md` -> this file
 - Implemented M7 rollout-gate baseline:
   - deterministic `rollout-gates` evaluator for shadow quality, reward stability, autonomous escalation rate, and rollback budget.
   - CLI gate output for canary/promotion readiness checks in CI or scheduled runs.
-- Remaining: M6 anomaly-intelligence routing and false-positive tuning hardening.
+- Implemented M6.3 anomaly routing baseline:
+  - deterministic anomaly class routing module shared by guardian, soak control, playbook generation, and recommendation flow.
+  - anomaly classes now map to allowlisted action ladders and verification ladders with policy-safe defaults.
+- Implemented M6.4 bounded feedback calibration baseline:
+  - assistant recommendation confidence now applies bounded calibration from `wicap.feedback.v1` labels.
+  - guardian alerts now include per-route feedback calibration context for operator review.
+- Remaining: per-deployment threshold tuning and site-specific anomaly-class calibration.
 
 ## 1. Program Goal
 Build a WiCAP-native autonomous control agent with durable memory, adaptive learning, network anomaly intelligence, and secure cloud telemetry without breaking deterministic safety guarantees.
@@ -387,7 +393,7 @@ References are listed in Section 12.
 - Exit criteria:
   - anomaly score + confidence + contributing features emitted per event.
 
-### Work Slice M6.3 - Assistant Correlation and Action Routing
+### Work Slice M6.3 - Assistant Correlation and Action Routing (Implemented Baseline)
 - Goal: map anomaly classes to action families and verification ladders.
 - Assistant files:
   - `src/wicap_assist/guardian.py`
@@ -398,7 +404,7 @@ References are listed in Section 12.
 - Exit criteria:
   - anomaly classes deterministically select approved action ladders.
 
-### Work Slice M6.4 - False Positive Feedback Loop
+### Work Slice M6.4 - False Positive Feedback Loop (Implemented Baseline)
 - Goal: operator feedback updates anomaly thresholds and action ranking safely.
 - WiCAP files:
   - feedback capture endpoints/tables.

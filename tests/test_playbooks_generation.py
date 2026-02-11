@@ -147,3 +147,45 @@ def test_generate_playbooks_from_clustered_log_events(tmp_path: Path) -> None:
     assert playbook_path.name in index_content
 
     conn.close()
+
+
+def test_generate_playbook_for_network_anomaly_includes_route_ladder(tmp_path: Path) -> None:
+    conn = connect_db(tmp_path / "assistant.db")
+    cur = conn.cursor()
+
+    log_path = tmp_path / "captures" / "wicap_anomaly_events.jsonl"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text("sample\n", encoding="utf-8")
+    cur.execute(
+        "INSERT INTO sources(kind, path, mtime, size) VALUES(?, ?, ?, ?)",
+        ("network_event_log", str(log_path), log_path.stat().st_mtime, log_path.stat().st_size),
+    )
+    source_id = int(cur.lastrowid)
+    cur.execute(
+        """
+        INSERT INTO log_events(source_id, ts_text, category, fingerprint, snippet, file_path, extra_json)
+        VALUES(?, ?, 'network_anomaly', ?, ?, ?, '{}')
+        """,
+        (
+            source_id,
+            "2026-02-11T16:00:00Z",
+            "net-1",
+            "deauth_spike|global|aa:bb:cc:dd:ee:ff",
+            str(log_path),
+        ),
+    )
+    conn.commit()
+
+    playbooks_dir = tmp_path / "docs" / "playbooks"
+    generated = generate_playbooks(
+        conn,
+        top_n=1,
+        playbooks_dir=playbooks_dir,
+        repo_root=tmp_path,
+        load_commits_fn=lambda *args, **kwargs: [],
+    )
+    assert len(generated) == 1
+    content = generated[0].read_text(encoding="utf-8")
+    assert "docker compose restart wicap-scout" in content
+    assert "python scripts/check_wicap_status.py --local-only" in content
+    conn.close()

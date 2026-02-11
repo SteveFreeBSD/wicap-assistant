@@ -12,6 +12,7 @@ import sqlite3
 import time
 from typing import Any
 
+from wicap_assist.anomaly_routing import query_feedback_calibration, route_for_anomaly
 from wicap_assist.harness_match import find_relevant_harness_scripts
 from wicap_assist.ingest.soak_logs import _categories_for_line
 from wicap_assist.evidence_query import (
@@ -24,6 +25,14 @@ from wicap_assist.util.evidence import normalize_signature
 from wicap_assist.util.redact import to_snippet
 
 _ALERT_CATEGORIES = {"error", "docker_fail", "pytest_fail", "network_anomaly", "network_flow"}
+_NETWORK_ALERT_HINTS = (
+    "deauth",
+    "probe",
+    "anomaly",
+    "suricata",
+    "zeek",
+    "dns_tunnel",
+)
 
 
 def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
@@ -56,8 +65,20 @@ class GuardianAlert:
     past_fix_passes: int = 0
     past_fix_fails: int = 0
     relapse_risk: bool = False
+    anomaly_class: str | None = None
+    anomaly_action_ladder: list[str] = field(default_factory=list)
+    anomaly_verification_ladder: list[str] = field(default_factory=list)
+    anomaly_feedback: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
+        anomaly_route: dict[str, Any] | None = None
+        if self.anomaly_class:
+            anomaly_route = {
+                "class_id": self.anomaly_class,
+                "action_ladder": list(self.anomaly_action_ladder),
+                "verification_ladder": list(self.anomaly_verification_ladder),
+                "feedback": self.anomaly_feedback or {},
+            }
         return {
             "signature": self.signature,
             "category": self.category,
@@ -78,6 +99,7 @@ class GuardianAlert:
             },
             "file": self.file_path,
             "line": self.line,
+            "anomaly_route": anomaly_route,
         }
 
 
@@ -240,6 +262,13 @@ def _read_new_lines(
     return [line.rstrip("\r") for line in text.splitlines() if line.strip()]
 
 
+def _is_network_alert(category: str, signature: str) -> bool:
+    if category in {"network_anomaly", "network_flow"}:
+        return True
+    lowered = signature.lower()
+    return any(token in lowered for token in _NETWORK_ALERT_HINTS)
+
+
 def scan_guardian_once(
     conn: sqlite3.Connection,
     *,
@@ -305,6 +334,26 @@ def scan_guardian_once(
                 vtr_passes, vtr_fails, vtr_relapse = _query_verification_track_record(
                     conn, signature
                 )
+                anomaly_class = None
+                anomaly_action_ladder: list[str] = []
+                anomaly_verification_ladder: list[str] = []
+                anomaly_feedback: dict[str, Any] | None = None
+                if _is_network_alert(category, signature):
+                    route_category = category if category in {"network_anomaly", "network_flow"} else "network_anomaly"
+                    attack_type = signature.split("|", 1)[0].strip().lower() if "|" in signature else None
+                    feedback = query_feedback_calibration(conn, attack_type=attack_type)
+                    route = route_for_anomaly(
+                        signature=signature,
+                        category=route_category,
+                        attack_type=attack_type,
+                        feedback=feedback,
+                    )
+                    anomaly_class = str(route.get("class_id", "")).strip() or None
+                    anomaly_action_ladder = [str(item) for item in route.get("action_ladder", []) if str(item).strip()]
+                    anomaly_verification_ladder = [
+                        str(item) for item in route.get("verification_ladder", []) if str(item).strip()
+                    ]
+                    anomaly_feedback = route.get("feedback") if isinstance(route.get("feedback"), dict) else {}
                 alerts.append(
                     GuardianAlert(
                         signature=signature,
@@ -320,6 +369,10 @@ def scan_guardian_once(
                         past_fix_passes=vtr_passes,
                         past_fix_fails=vtr_fails,
                         relapse_risk=vtr_relapse,
+                        anomaly_class=anomaly_class,
+                        anomaly_action_ladder=anomaly_action_ladder,
+                        anomaly_verification_ladder=anomaly_verification_ladder,
+                        anomaly_feedback=anomaly_feedback,
                     )
                 )
     return alerts
@@ -344,6 +397,23 @@ def format_guardian_alert_text(alert: GuardianAlert) -> str:
         if alert.relapse_risk:
             relapse_tag = " \u26a0 RELAPSE RISK"
 
+    anomaly_lines: list[str] = []
+    if alert.anomaly_class:
+        anomaly_lines.append(f"Anomaly Route Class: {alert.anomaly_class}")
+        if alert.anomaly_action_ladder:
+            anomaly_lines.append("Action Ladder: " + " -> ".join(alert.anomaly_action_ladder))
+        if alert.anomaly_verification_ladder:
+            anomaly_lines.append(
+                "Verification Ladder: " + " -> ".join(alert.anomaly_verification_ladder[:2])
+            )
+        if isinstance(alert.anomaly_feedback, dict):
+            status = str(alert.anomaly_feedback.get("status", "")).strip()
+            scale = alert.anomaly_feedback.get("confidence_scale")
+            if status:
+                anomaly_lines.append(f"Feedback Calibration: status={status} scale={scale}")
+
+    anomaly_block = "\n".join(anomaly_lines) if anomaly_lines else "(none)"
+
     return "\n".join(
         [
             "=== WICAP Guardian Alert ===",
@@ -362,6 +432,9 @@ def format_guardian_alert_text(alert: GuardianAlert) -> str:
             harness,
             "",
             f"Past Fix Track Record: {vtr_line}{relapse_tag}",
+            "",
+            "Anomaly Route:",
+            anomaly_block,
             "",
             "File:",
             alert.file_path,

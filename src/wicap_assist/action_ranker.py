@@ -10,7 +10,7 @@ from typing import Any, Mapping
 from wicap_assist.actuators import ALLOWED_RESTART_SERVICES
 
 _BASE_ACTIONS = ("status_check", "compose_up", "shutdown")
-_DEFAULT_SHADOW_GATE_WINDOW = 500
+_DEFAULT_SHADOW_GATE_WINDOW = 160
 _DEFAULT_SHADOW_GATE_MIN_SAMPLES = 20
 _DEFAULT_SHADOW_GATE_MIN_AGREEMENT = 0.7
 _DEFAULT_SHADOW_GATE_MIN_SUCCESS = 0.6
@@ -88,15 +88,15 @@ def _context_boost(action: str, *, down_services: list[str], mode: str) -> float
     lowered = str(action).strip().lower()
     if lowered.startswith("restart_service:"):
         service = lowered.split(":", 1)[1].strip()
-        return 14.0 if service in down_services else 2.0
+        return 8.0 if service in down_services else 1.0
     if lowered == "compose_up":
         if len(down_services) >= 2:
-            return 10.0
+            return 5.0
         if len(down_services) == 1:
-            return 6.0
-        return -8.0
+            return 2.0
+        return -6.0
     if lowered == "status_check":
-        return 6.0 if not down_services else -3.0
+        return 6.0 if not down_services else 12.0
     if lowered == "shutdown":
         return -22.0 if mode != "autonomous" else -10.0
     return 0.0
@@ -135,7 +135,7 @@ def _shadow_quality_gate(conn: sqlite3.Connection) -> dict[str, Any]:
     ) = _shadow_gate_thresholds()
     rows = conn.execute(
         """
-        SELECT action, status, feature_json
+        SELECT decision, action, status, feature_json
         FROM decision_features
         WHERE feature_json LIKE '%shadow_ranker_top_action%'
         ORDER BY id DESC
@@ -158,6 +158,9 @@ def _shadow_quality_gate(conn: sqlite3.Connection) -> dict[str, Any]:
         except json.JSONDecodeError:
             continue
         if not isinstance(feature, dict):
+            continue
+        decision = str(feature.get("decision") or row["decision"] or "").strip().lower()
+        if decision not in {"threshold_check", "anomaly_verify"}:
             continue
         shadow_action = str(feature.get("shadow_ranker_top_action") or "").strip()
         if not shadow_action:
