@@ -8,6 +8,7 @@ import subprocess
 import sys
 from typing import Callable
 
+from wicap_assist.control_planes import ControlPlanePolicy
 from wicap_assist.util.redact import to_snippet
 
 Runner = Callable[..., subprocess.CompletedProcess[str]]
@@ -59,6 +60,7 @@ def run_allowlisted_action(
     mode: str,
     repo_root: Path,
     runner: Runner,
+    plane_policy: ControlPlanePolicy | None = None,
     timeout_seconds: int = 120,
 ) -> ActuatorResult:
     """Execute one allowlisted action in assist mode or return skip/reject status."""
@@ -70,6 +72,14 @@ def run_allowlisted_action(
 
     if action_name not in {"status_check", "compose_up", "shutdown", "restart_service"}:
         return ActuatorResult(status="rejected", commands=[], detail=f"unknown action: {action}")
+
+    policy = plane_policy or ControlPlanePolicy.from_env()
+    plane_decision = policy.evaluate(action_name=action_name)
+    if not plane_decision.allowed:
+        detail = plane_decision.reason
+        if plane_decision.denied_by:
+            detail = f"{plane_decision.denied_by}: {detail}"
+        return ActuatorResult(status="rejected", commands=[], detail=detail)
 
     if action_name == "status_check":
         script = _status_script_path(repo_root)

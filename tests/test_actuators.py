@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from wicap_assist.actuators import run_allowlisted_action
+from wicap_assist.control_planes import ControlPlanePolicy
 
 
 class _DummyResult:
@@ -130,3 +131,19 @@ def test_status_check_uses_normalized_action_and_json_flag(tmp_path: Path) -> No
     assert result.status == "executed_ok"
     assert calls
     assert calls[0][-2:] == ["--local-only", "--json"]
+
+
+def test_compose_up_is_rejected_when_elevated_plane_disabled(tmp_path: Path) -> None:
+    result = run_allowlisted_action(
+        action="compose_up",
+        mode="assist",
+        repo_root=tmp_path,
+        runner=lambda *args, **kwargs: _DummyResult(0),  # type: ignore[no-untyped-def]
+        plane_policy=ControlPlanePolicy(
+            runtime_enabled=True,
+            tool_policy_enabled=True,
+            elevated_enabled=False,
+        ),
+    )
+    assert result.status == "rejected"
+    assert "elevated_plane" in result.detail
