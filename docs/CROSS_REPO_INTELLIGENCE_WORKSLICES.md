@@ -1,6 +1,6 @@
 # Cross-Repo Intelligent Agent Integration Plan
 
-Status: In Progress (M0 artifacts implemented: contract files + parity tests)
+Status: In Progress (M0-M3 foundations implemented; M5 baseline telemetry implemented)
 Owners: WiCAP Core + wicap-assistant
 Canonical chain: `ASSISTANT_MISSION.md` -> `ASSISTANT_ROADMAP.md` -> this file
 
@@ -8,7 +8,19 @@ Canonical chain: `ASSISTANT_MISSION.md` -> `ASSISTANT_ROADMAP.md` -> this file
 - Implemented M0 baseline artifacts in both repos:
   - WiCAP: `ops/contracts/wicap.event.v1.json`, `ops/contracts/wicap.control.v1.json`, contract fixture exports, schema tests.
   - Assistant: `ops/contracts/wicap.telemetry.v1.json`, WiCAP contract fixtures, parity tests.
-- Remaining M0 work: CI pipeline wiring for mandatory contract parity gate in both repos.
+- Implemented M1 control-plane gates:
+  - Assistant: deny-precedence runtime/tool/elevated plane checks in allowlisted actuators.
+  - WiCAP: policy-gated `/api/system/control-intent` intake + plane audit records + status-script intent validator.
+- Implemented M2.1 episodic memory tier:
+  - Assistant DB tables: `episodes`, `episode_events`, `episode_outcomes` with additive migration.
+  - Live and soak control loops now write episode timelines per control action.
+- Implemented M3 network semantics baseline:
+  - WiCAP: `wicap.event.v1` normalization helpers + Zeek conn and Suricata EVE compatibility exports.
+  - Assistant: network event ingest adapter (`--scan-network-events`) and routing into recommendation/playbook/rollup/guardian categories.
+- Implemented M5 baseline telemetry:
+  - WiCAP optional OTLP collector profile (`profiles: [otel]`) with required processors.
+  - Assistant OTLP-aligned telemetry envelopes with redaction hooks and tests.
+- Remaining: M2.2+ semantic memory/learning, M4 adaptive ranking gates, M5.3+ endpoint/auth/resilience hardening, M6/M7 rollout intelligence gates.
 
 ## 1. Program Goal
 Build a WiCAP-native autonomous control agent with durable memory, adaptive learning, network anomaly intelligence, and secure cloud telemetry without breaking deterministic safety guarantees.
@@ -77,7 +89,7 @@ References are listed in Section 12.
 
 ## Milestone M0: Program Bootstrap and Contracts
 
-### Work Slice M0.1 - Contract Spec Freeze
+### Work Slice M0.1 - Contract Spec Freeze (Implemented)
 - Goal: Freeze v1 event/control/telemetry contracts before feature expansion.
 - WiCAP files:
   - `ops/contracts/wicap.event.v1.json` (new)
@@ -92,7 +104,7 @@ References are listed in Section 12.
 - Exit criteria:
   - both repos validate same schema versions in CI.
 
-### Work Slice M0.2 - Cross-Repo Fixture Harness
+### Work Slice M0.2 - Cross-Repo Fixture Harness (Implemented)
 - Goal: deterministic integration tests against fixture snapshots from both repos.
 - WiCAP files:
   - `tests/fixtures/contracts/*` (new)
@@ -106,7 +118,7 @@ References are listed in Section 12.
 
 ## Milestone M1: OpenClaw-Style Control Plane Separation
 
-### Work Slice M1.1 - Split Control Planes in Assistant
+### Work Slice M1.1 - Split Control Planes in Assistant (Implemented)
 - Goal: separate runtime plane vs tool-policy plane vs elevated plane.
 - Assistant files:
   - `src/wicap_assist/soak_control.py`
@@ -118,7 +130,7 @@ References are listed in Section 12.
 - Exit criteria:
   - action can run only when all three planes permit.
 
-### Work Slice M1.2 - WiCAP Control Surface Policy Gate
+### Work Slice M1.2 - WiCAP Control Surface Policy Gate (Implemented)
 - Goal: WiCAP refuses control intents not signed by policy profile.
 - WiCAP files:
   - `scripts/check_wicap_status.py`
@@ -140,7 +152,7 @@ References are listed in Section 12.
 
 ## Milestone M2: Nanobot-Style Memory Tiers (Deterministic)
 
-### Work Slice M2.1 - Episodic Memory Store
+### Work Slice M2.1 - Episodic Memory Store (Implemented)
 - Goal: persist action episodes with pre-state, action, result, and post-state windows.
 - Assistant files:
   - `src/wicap_assist/db.py` (new tables)
@@ -188,7 +200,7 @@ References are listed in Section 12.
 
 ## Milestone M3: WiCAP-Native Network Intelligence (Suricata/Zeek-Compatible)
 
-### Work Slice M3.1 - Canonical Network Event Schema in WiCAP
+### Work Slice M3.1 - Canonical Network Event Schema in WiCAP (Implemented Baseline)
 - Goal: emit stable flow/session events compatible with Suricata EVE + Zeek conn semantics.
 - WiCAP files:
   - `event_processor.py`
@@ -200,7 +212,7 @@ References are listed in Section 12.
 - Exit criteria:
   - events include `flow`, `community_id`, `proto`, `service`, `duration`, `bytes`, `packets` when available.
 
-### Work Slice M3.2 - Zeek-Compatible Connection Summary Export
+### Work Slice M3.2 - Zeek-Compatible Connection Summary Export (Implemented Baseline)
 - Goal: produce `conn`-like summaries from WiCAP runtime data.
 - WiCAP files:
   - new exporter module under `src/wicap/telemetry/`.
@@ -209,7 +221,7 @@ References are listed in Section 12.
 - Exit criteria:
   - generated output supports direct downstream comparison with Zeek conn fields.
 
-### Work Slice M3.3 - Suricata-Compatible Security Event Export
+### Work Slice M3.3 - Suricata-Compatible Security Event Export (Implemented Baseline)
 - Goal: produce EVE-like typed events (`alert`, `dns`, `http`, `flow`, etc.) where signal exists.
 - WiCAP files:
   - event normalization modules + export writer.
@@ -218,7 +230,7 @@ References are listed in Section 12.
 - Exit criteria:
   - event categories map to a documented compatibility matrix.
 
-### Work Slice M3.4 - Assistant Ingestion Adapter for WiCAP Network Events
+### Work Slice M3.4 - Assistant Ingestion Adapter for WiCAP Network Events (Implemented Baseline)
 - Goal: consume WiCAP-native network events and link them to current recommendation and guardian pipelines.
 - Assistant files:
   - `src/wicap_assist/ingest/network_events.py` (new)
@@ -273,7 +285,7 @@ References are listed in Section 12.
 
 ## Milestone M5: Provider-Neutral OTLP Cloud Telemetry
 
-### Work Slice M5.1 - Collector Deployment Profile (WiCAP)
+### Work Slice M5.1 - Collector Deployment Profile (WiCAP) (Implemented)
 - Goal: provide optional OpenTelemetry Collector profile in WiCAP compose.
 - WiCAP files:
   - `docker-compose.yml` (profile additions)
@@ -286,7 +298,7 @@ References are listed in Section 12.
 - Exit criteria:
   - local stack exports telemetry to configured backend in test mode.
 
-### Work Slice M5.2 - Assistant Telemetry Spans/Metrics/Logs
+### Work Slice M5.2 - Assistant Telemetry Spans/Metrics/Logs (Implemented Baseline)
 - Goal: emit control loop telemetry from assistant.
 - Assistant files:
   - `src/wicap_assist/telemetry.py` (new)

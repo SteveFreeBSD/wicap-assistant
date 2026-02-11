@@ -51,25 +51,27 @@
 - Persisted control state, actions, and escalation outcomes for resume/audit workflows.
 - Expanded real-time observability coverage for WICAP runtime and soak ecosystem logs.
 
-## Phase 9 – Plane-Separated Agentic Control (Planned)
-- Implement OpenClaw-style runtime/tool-policy/elevated plane separation with deny-precedence evaluation.
-- Enforce cross-repo control intent contracts (`wicap.control.v1`) and strict policy profile validation.
-- Expand autonomous profiles with explicit rollout gates, shadow mode, and rollback budget controls.
+## Phase 9 – Plane-Separated Agentic Control (In Progress)
+- Implemented OpenClaw-style runtime/tool-policy/elevated plane separation with deny-precedence evaluation in actuator flow.
+- Implemented cross-repo control intent policy gate (`wicap.control.v1`) with accept/reject audit metadata in WiCAP intake surfaces.
+- Remaining: expand autonomous rollout gates, shadow mode quality thresholds, and rollback budget SLO enforcement.
 
-## Phase 10 – Memory Tiers and Learning (Planned)
-- Add episodic memory for action/outcome timelines.
+## Phase 10 – Memory Tiers and Learning (In Progress)
+- Implemented episodic memory for action/outcome timelines (`episodes`, `episode_events`, `episode_outcomes`) with additive migration safety.
 - Add semantic retrieval over historical incidents and control episodes.
 - Add working-memory context for active sessions and resumable handoffs.
 - Add adaptive action ranking (shadow-mode first, guarded promotion after quality gates).
 
-## Phase 11 – WiCAP-Native Network Intelligence (Planned)
-- Ingest WiCAP-native network envelopes with Suricata/Zeek-compatible field contracts.
+## Phase 11 – WiCAP-Native Network Intelligence (In Progress)
+- Implemented ingest adapter for WiCAP-native network envelopes and integrated network categories into recommendation/playbook/rollup/guardian evidence paths.
+- Implemented WiCAP-side event normalization + Zeek conn and Suricata EVE compatibility exporters for contract-aligned flow semantics.
 - Correlate anomaly classes to control ladders and verification playbooks.
 - Close false-positive loops with bounded operator feedback and deterministic recalibration.
 
-## Phase 12 – OTLP Telemetry and Observability (Planned)
-- Add provider-neutral OTLP traces/metrics/logs for live control loops and recovery workflows.
-- Add telemetry redaction policy and compliance tests.
+## Phase 12 – OTLP Telemetry and Observability (In Progress)
+- Implemented provider-neutral OTLP-aligned traces/metrics/log payload emission for live and supervised soak control cycles.
+- Implemented telemetry redaction hooks and regression tests for secret/token masking.
+- Implemented optional WiCAP OpenTelemetry Collector compose profile baseline.
 - Add backpressure/failure handling so telemetry delivery never destabilizes control.
 
 ## Active Program Plan
