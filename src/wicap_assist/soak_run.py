@@ -38,6 +38,7 @@ from wicap_assist.soak_manager import (
     validate_runner_path,
 )
 from wicap_assist.soak_profiles import learn_soak_runbook, select_learned_soak_profile
+from wicap_assist.telemetry import emit_control_cycle_telemetry
 from wicap_assist.util.time import utc_now_iso
 
 SOAK_RUNS_ROOT = Path("data/soak_runs")
@@ -660,6 +661,7 @@ def run_supervised_soak(
                     )
 
                     cycle_control_events = control_policy.process_observation(observation)
+                    cycle_actions_executed = 0
                     for event in cycle_control_events:
                         if isinstance(event, dict):
                             event.setdefault(
@@ -682,6 +684,7 @@ def run_supervised_soak(
                         status = str(event.get("status", ""))
                         if status.startswith("executed_"):
                             control_actions_executed += 1
+                            cycle_actions_executed += 1
                         if status == "escalated":
                             control_escalations += 1
                         detail = event.get("detail_json", {})
@@ -705,6 +708,29 @@ def run_supervised_soak(
                     )
                     if snapshot_path is not None:
                         snapshot_paths.append(str(snapshot_path))
+
+                    anomaly_events = 0
+                    if isinstance(top_signatures, list):
+                        for item in top_signatures:
+                            if not isinstance(item, dict):
+                                continue
+                            anomaly_events += int(item.get("count", 0) or 0)
+                    try:
+                        emit_control_cycle_telemetry(
+                            mode=str(control_mode),
+                            profile=resolved_profile_name,
+                            decision="soak_observe_cycle",
+                            observation_cycle=int(observation_cycles),
+                            actions_executed=int(cycle_actions_executed),
+                            anomaly_events=int(anomaly_events),
+                            message=alert_value,
+                            attributes={
+                                "source": "soak_run",
+                                "managed_observe": bool(managed_observe),
+                            },
+                        )
+                    except Exception:
+                        pass
 
                     if stop_on_escalation:
                         escalated = next(
@@ -817,6 +843,7 @@ def run_supervised_soak(
                 }
             )
             cycle_control_events = control_policy.process_observation(observation)
+            cycle_actions_executed = 0
             for event in cycle_control_events:
                 if isinstance(event, dict):
                     event.setdefault(
@@ -839,6 +866,7 @@ def run_supervised_soak(
                 status = str(event.get("status", ""))
                 if status.startswith("executed_"):
                     control_actions_executed += 1
+                    cycle_actions_executed += 1
                 if status == "escalated":
                     control_escalations += 1
                 detail = event.get("detail_json", {})
@@ -862,6 +890,29 @@ def run_supervised_soak(
             )
             if snapshot_path is not None:
                 snapshot_paths.append(str(snapshot_path))
+
+            anomaly_events = 0
+            if isinstance(top_signatures, list):
+                for item in top_signatures:
+                    if not isinstance(item, dict):
+                        continue
+                    anomaly_events += int(item.get("count", 0) or 0)
+            try:
+                emit_control_cycle_telemetry(
+                    mode=str(control_mode),
+                    profile=resolved_profile_name,
+                    decision="soak_observe_final_cycle",
+                    observation_cycle=int(observation_cycles),
+                    actions_executed=int(cycle_actions_executed),
+                    anomaly_events=int(anomaly_events),
+                    message=alert_value,
+                    attributes={
+                        "source": "soak_run",
+                        "final_cycle": True,
+                    },
+                )
+            except Exception:
+                pass
 
             mark_phase("soak_execute", "completed" if exit_code == 0 else "failed")
             mark_phase("observe", "completed")

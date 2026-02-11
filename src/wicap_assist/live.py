@@ -34,6 +34,7 @@ from wicap_assist.probes import probe_docker, probe_http_health, probe_network
 from wicap_assist.recommend import build_recommendation
 from wicap_assist.soak_control import ControlPolicy
 from wicap_assist.soak_manager import build_operator_guidance
+from wicap_assist.telemetry import emit_control_cycle_telemetry
 from wicap_assist.util.evidence import normalize_signature
 from wicap_assist.util.redact import to_snippet
 
@@ -585,9 +586,12 @@ def run_live_monitor(
                 start_at_end_for_new=not bool(once),
             )
             cycle_control_events = policy.process_observation(observation)
+            cycle_actions_executed = 0
             for event in cycle_control_events:
                 total_control_events += 1
                 status = str(event.get("status", ""))
+                if status.startswith("executed_"):
+                    cycle_actions_executed += 1
                 if status == "escalated":
                     escalated = True
                 ts = str(event.get("ts", _utc_now_iso()))
@@ -636,6 +640,30 @@ def run_live_monitor(
                 )
 
             total_observations += 1
+            anomaly_events = 0
+            top_signatures = observation.get("top_signatures", [])
+            if isinstance(top_signatures, list):
+                for item in top_signatures:
+                    if not isinstance(item, dict):
+                        continue
+                    anomaly_events += int(item.get("count", 0) or 0)
+            try:
+                emit_control_cycle_telemetry(
+                    mode=str(control_mode),
+                    profile=resolved_profile_name,
+                    decision="live_cycle",
+                    observation_cycle=int(total_observations),
+                    actions_executed=int(cycle_actions_executed),
+                    anomaly_events=int(anomaly_events),
+                    message=str(observation.get("alert", "")),
+                    attributes={
+                        "source": "live_monitor",
+                        "guardian_alert_count": int(len(alerts)),
+                    },
+                )
+            except Exception:
+                # Telemetry must never break control loop execution.
+                pass
             recommended_payload = observation.get("recommended", [])
             if not isinstance(recommended_payload, list):
                 recommended_payload = []
