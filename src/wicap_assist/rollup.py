@@ -16,9 +16,15 @@ from wicap_assist.git_context import (
     load_codex_git_evidence,
     load_codex_git_evidence_fallback,
 )
-from wicap_assist.incident import INCIDENTS_DIR
-from wicap_assist.playbooks import PLAYBOOKS_DIR
-from wicap_assist.util.evidence import extract_tokens, normalize_signature, parse_utc_datetime
+from wicap_assist.evidence_query import (
+    query_related_session_ids,
+    query_verification_track_record,
+    signature_tokens,
+    where_like,
+)
+from wicap_assist.incident import default_incidents_dir
+from wicap_assist.playbooks import default_playbooks_dir
+from wicap_assist.util.evidence import normalize_signature, parse_utc_datetime
 
 _CATEGORIES = ("error", "docker_fail", "pytest_fail")
 _INCIDENT_DATE_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})-")
@@ -146,40 +152,16 @@ def _load_incident_signatures_from_markdown(
 
 
 def _related_session_ids(conn: sqlite3.Connection, signature: str) -> list[str]:
-    tokens = extract_tokens(signature, limit=8, stopwords={"n", "hex", "mac"})
-    if not tokens:
-        return []
-
-    where = " OR ".join("lower(sg.snippet) LIKE ?" for _ in tokens)
-    args = [f"%{token}%" for token in tokens]
-
-    rows = conn.execute(
-        f"""
-        SELECT
-            s.session_id,
-            max(coalesce(sg.ts, s.ts_last, '')) AS sort_ts
-        FROM signals AS sg
-        JOIN sessions AS s ON s.id = sg.session_pk
-        WHERE s.is_wicap = 1
-          AND ({where})
-        GROUP BY s.session_id
-        ORDER BY sort_ts DESC, s.session_id ASC
-        LIMIT 50
-        """,
-        args,
-    ).fetchall()
-    return [str(row["session_id"]) for row in rows if str(row["session_id"]).strip()]
+    return query_related_session_ids(conn, signature, limit=50)
 
 
 def _related_conversation_ids(conn: sqlite3.Connection, signature: str) -> list[str]:
     if not _table_exists(conn, "conversation_signals") or not _table_exists(conn, "conversations"):
         return []
-    tokens = extract_tokens(signature, limit=8, stopwords={"n", "hex", "mac"})
-    if not tokens:
+    tokens = signature_tokens(signature, limit=8)
+    where, args = where_like("cs.snippet", tokens)
+    if not where:
         return []
-
-    where = " OR ".join("lower(cs.snippet) LIKE ?" for _ in tokens)
-    args = [f"%{token}%" for token in tokens]
     rows = conn.execute(
         f"""
         SELECT DISTINCT c.conversation_id
@@ -221,61 +203,7 @@ def _build_verification_track_record(
     """Build verification outcome summary for a rollup signature."""
     if not _table_exists(conn, "verification_outcomes"):
         return None
-
-    tokens = extract_tokens(signature, limit=6, stopwords={"n", "hex", "mac"})
-    if not tokens:
-        return None
-
-    where = " OR ".join("lower(signature) LIKE ?" for _ in tokens)
-    args = [f"%{token}%" for token in tokens]
-    rows = conn.execute(
-        f"""
-        SELECT outcome, ts
-        FROM verification_outcomes
-        WHERE {where}
-        ORDER BY coalesce(ts, '') ASC
-        """,
-        args,
-    ).fetchall()
-
-    if not rows:
-        return None
-
-    passes = 0
-    fails = 0
-    unknowns = 0
-    for row in rows:
-        outcome = str(row["outcome"]).strip().lower()
-        if outcome == "pass":
-            passes += 1
-        elif outcome == "fail":
-            fails += 1
-        else:
-            unknowns += 1
-
-    # Detect relapse: a fail occurring after at least one pass
-    seen_pass = False
-    relapse = False
-    for row in rows:
-        outcome = str(row["outcome"]).strip().lower()
-        if outcome == "pass":
-            seen_pass = True
-        elif outcome == "fail" and seen_pass:
-            relapse = True
-            break
-
-    # Net confidence effect: capped positive boost minus failure penalty
-    positive = min(2, passes)
-    negative = min(4, fails * 2)
-    net_effect = positive - negative
-
-    return {
-        "passes": passes,
-        "fails": fails,
-        "unknowns": unknowns,
-        "relapse_detected": relapse,
-        "net_confidence_effect": net_effect,
-    }
+    return query_verification_track_record(conn, signature)
 
 
 def generate_rollup(
@@ -284,10 +212,12 @@ def generate_rollup(
     days: int = 30,
     top: int = 10,
     now: datetime | None = None,
-    incidents_dir: Path = INCIDENTS_DIR,
-    playbooks_dir: Path = PLAYBOOKS_DIR,
+    incidents_dir: Path | None = None,
+    playbooks_dir: Path | None = None,
 ) -> dict[str, Any]:
     """Generate cross-incident rollup data."""
+    resolved_incidents_dir = incidents_dir or default_incidents_dir()
+    resolved_playbooks_dir = playbooks_dir or default_playbooks_dir()
     bounded_days = max(1, int(days))
     bounded_top = max(1, int(top))
     now_utc = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
@@ -296,7 +226,7 @@ def generate_rollup(
     incident_signatures = _load_incident_signatures_from_db(conn, start=window_start, end=now_utc)
     if not incident_signatures:
         incident_signatures = _load_incident_signatures_from_markdown(
-            incidents_dir,
+            resolved_incidents_dir,
             start=window_start,
             end=now_utc,
         )
@@ -341,7 +271,7 @@ def generate_rollup(
         if event_dt > bucket["last_seen_dt"]:
             bucket["last_seen_dt"] = event_dt
 
-    playbook_map = _load_playbook_map(playbooks_dir)
+    playbook_map = _load_playbook_map(resolved_playbooks_dir)
 
     items: list[dict[str, Any]] = []
     for bucket in grouped.values():

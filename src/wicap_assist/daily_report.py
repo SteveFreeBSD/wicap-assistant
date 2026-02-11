@@ -10,8 +10,8 @@ import re
 import sqlite3
 from typing import Any
 
-from wicap_assist.incident import INCIDENTS_DIR
-from wicap_assist.playbooks import PLAYBOOKS_DIR
+from wicap_assist.incident import default_incidents_dir
+from wicap_assist.playbooks import default_playbooks_dir
 from wicap_assist.util.evidence import extract_tokens, normalize_signature, parse_utc_datetime
 
 _CATEGORIES = ("error", "docker_fail", "pytest_fail")
@@ -107,10 +107,12 @@ def generate_daily_report(
     days: int = 3,
     top: int = 10,
     now: datetime | None = None,
-    playbooks_dir: Path = PLAYBOOKS_DIR,
-    incidents_dir: Path = INCIDENTS_DIR,
+    playbooks_dir: Path | None = None,
+    incidents_dir: Path | None = None,
 ) -> dict[str, Any]:
     """Build daily regression report data."""
+    resolved_playbooks_dir = playbooks_dir or default_playbooks_dir()
+    resolved_incidents_dir = incidents_dir or default_incidents_dir()
     bounded_days = max(1, int(days))
     bounded_top = max(1, int(top))
     now_utc = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
@@ -156,7 +158,7 @@ def generate_daily_report(
         else:
             bucket["baseline_count"] += 1
 
-    playbook_map = _load_playbook_map(playbooks_dir)
+    playbook_map = _load_playbook_map(resolved_playbooks_dir)
 
     items: list[dict[str, Any]] = []
     for bucket in grouped.values():
@@ -175,7 +177,7 @@ def generate_daily_report(
         signature = str(bucket["signature"])
         category = str(bucket["category"])
         playbook = playbook_map.get((category, signature))
-        incident = _match_incident_filename(signature, category, incidents_dir)
+        incident = _match_incident_filename(signature, category, resolved_incidents_dir)
 
         items.append(
             {

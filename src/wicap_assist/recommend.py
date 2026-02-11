@@ -17,12 +17,13 @@ from wicap_assist.git_context import (
     load_codex_git_evidence_fallback,
 )
 from wicap_assist.harness_match import find_relevant_harness_scripts
+from wicap_assist.evidence_query import signature_tokens, where_like
 from wicap_assist.recommend_confidence import (
     calibrate_phase4,
     classify_verification_step,
     normalize_verification_step,
 )
-from wicap_assist.util.evidence import extract_tokens, normalize_signature, parse_utc_datetime
+from wicap_assist.util.evidence import normalize_signature, parse_utc_datetime
 from wicap_assist.util.redact import to_snippet
 
 _LOG_CATEGORIES = ("error", "docker_fail", "pytest_fail")
@@ -121,12 +122,10 @@ def _pick_context(conn: sqlite3.Connection, target: str) -> SignatureContext | N
 
 
 def _query_related_signals(conn: sqlite3.Connection, signature: str) -> list[sqlite3.Row]:
-    tokens = extract_tokens(signature, limit=8, stopwords={"n", "hex", "mac"})
-    if not tokens:
+    tokens = signature_tokens(signature, limit=8)
+    where, args = where_like("sg.snippet", tokens)
+    if not where:
         return []
-
-    where = " OR ".join("lower(sg.snippet) LIKE ?" for _ in tokens)
-    args = [f"%{token}%" for token in tokens]
 
     session_rows = conn.execute(
         f"""

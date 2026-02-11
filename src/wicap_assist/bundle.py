@@ -9,6 +9,7 @@ import re
 import sqlite3
 from typing import Any
 
+from wicap_assist.config import wicap_repo_root
 from wicap_assist.ingest.git_history import (
     GitCommit,
     compute_window_from_mtimes,
@@ -18,16 +19,16 @@ from wicap_assist.util.evidence import commit_overlap_score, extract_tokens
 
 SOAK_CATEGORIES = ("error", "docker_fail", "pytest_fail")
 SIGNAL_CATEGORIES = ("errors", "commands", "file_paths", "outcomes")
-WICAP_REPO_ROOT = Path("/home/steve/apps/wicap")
 _PATH_HINT_RE = re.compile(r"\b(?:src|wicap-ui)/[A-Za-z0-9_./-]+")
 
 
-def _resolve_target_filter(target: str) -> tuple[str, list[str], str]:
+def _resolve_target_filter(target: str, *, repo_root: Path) -> tuple[str, list[str], str]:
     raw = target.strip()
     if not raw:
         raise ValueError("target is required")
 
-    root_prefix = str(WICAP_REPO_ROOT) + "/"
+    resolved_repo_root = repo_root.resolve()
+    root_prefix = str(resolved_repo_root) + "/"
     if raw.startswith(root_prefix):
         cleaned = raw.rstrip("/")
         if cleaned.endswith(".log"):
@@ -36,7 +37,7 @@ def _resolve_target_filter(target: str) -> tuple[str, list[str], str]:
 
     if raw.endswith(".log"):
         if "/" in raw:
-            full = str((WICAP_REPO_ROOT / raw.lstrip("/")).resolve())
+            full = str((resolved_repo_root / raw.lstrip("/")).resolve())
             return "file_path = ?", [full], full
         return "file_path LIKE ?", [f"%/{raw}"], raw
 
@@ -44,9 +45,10 @@ def _resolve_target_filter(target: str) -> tuple[str, list[str], str]:
     return "file_path LIKE ?", [f"%/{dirname}/%"], dirname
 
 
-def resolve_target_filter(target: str) -> tuple[str, list[str], str]:
+def resolve_target_filter(target: str, *, repo_root: Path | None = None) -> tuple[str, list[str], str]:
     """Public wrapper for bundle target resolution."""
-    return _resolve_target_filter(target)
+    resolved_repo_root = repo_root or wicap_repo_root()
+    return _resolve_target_filter(target, repo_root=resolved_repo_root)
 
 
 def _log_summary(conn: sqlite3.Connection, where_sql: str, params: list[str]) -> dict[str, list[dict[str, Any]]]:
@@ -208,10 +210,12 @@ def _git_commits_for_bundle(
     where_sql: str,
     params: list[str],
     log_summary: dict[str, list[dict[str, Any]]],
+    *,
+    repo_root: Path,
 ) -> list[dict[str, Any]]:
     files = _target_files(conn, where_sql, params)
     window_start, window_end = compute_window_from_mtimes(files)
-    commits = load_git_commits(WICAP_REPO_ROOT, window_start, window_end, max_commits=30)
+    commits = load_git_commits(repo_root, window_start, window_end, max_commits=30)
 
     hints = _extract_path_hints(log_summary)
     for commit in commits:
@@ -234,12 +238,19 @@ def _git_commits_for_bundle(
     return result
 
 
-def build_bundle(conn: sqlite3.Connection, target: str) -> dict[str, Any]:
+def build_bundle(conn: sqlite3.Connection, target: str, *, repo_root: Path | None = None) -> dict[str, Any]:
     """Build one triage bundle for a soak target."""
-    where_sql, params, normalized = _resolve_target_filter(target)
+    resolved_repo_root = repo_root or wicap_repo_root()
+    where_sql, params, normalized = _resolve_target_filter(target, repo_root=resolved_repo_root)
     summary = _log_summary(conn, where_sql, params)
     related = _related_sessions(conn, summary)
-    git_commits = _git_commits_for_bundle(conn, where_sql, params, summary)
+    git_commits = _git_commits_for_bundle(
+        conn,
+        where_sql,
+        params,
+        summary,
+        repo_root=resolved_repo_root,
+    )
 
     # Drop helper fingerprint used only internally for matching/ranking display quality.
     for category in SOAK_CATEGORIES:

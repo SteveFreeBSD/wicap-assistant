@@ -9,12 +9,16 @@ from pathlib import Path
 from typing import Any
 
 from wicap_assist.extract.signals import Signal, extract_operational_signals, session_gate
+from wicap_assist.settings import codex_home
 from wicap_assist.util.time import to_iso
 
-CODEX_ROOT = Path("/home/steve/.codex")
-HISTORY_PATH = CODEX_ROOT / "history.jsonl"
-SESSIONS_GLOB = str(CODEX_ROOT / "sessions" / "**" / "rollout-*.jsonl")
-ARCHIVED_GLOB = str(CODEX_ROOT / "archived_sessions" / "rollout-*.jsonl")
+
+def _codex_paths(codex_root: Path | None = None) -> tuple[Path, tuple[str, str]]:
+    root = (codex_root or codex_home()).expanduser()
+    history = root / "history.jsonl"
+    sessions_glob = str(root / "sessions" / "**" / "rollout-*.jsonl")
+    archived_glob = str(root / "archived_sessions" / "rollout-*.jsonl")
+    return history, (sessions_glob, archived_glob)
 
 
 @dataclass(slots=True)
@@ -42,16 +46,17 @@ def source_kind_for(path: Path) -> str:
     return "session"
 
 
-def scan_codex_paths() -> list[Path]:
+def scan_codex_paths(*, codex_root: Path | None = None) -> list[Path]:
     """List configured Codex JSONL sources."""
     seen: set[str] = set()
     results: list[Path] = []
+    history_path, globs = _codex_paths(codex_root)
 
-    if HISTORY_PATH.exists():
-        seen.add(str(HISTORY_PATH))
-        results.append(HISTORY_PATH)
+    if history_path.exists():
+        seen.add(str(history_path))
+        results.append(history_path)
 
-    for pattern in (SESSIONS_GLOB, ARCHIVED_GLOB):
+    for pattern in globs:
         for hit in sorted(glob.glob(pattern, recursive=True)):
             if hit in seen:
                 continue

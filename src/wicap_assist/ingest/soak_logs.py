@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 import sqlite3
 
+from wicap_assist.config import wicap_repo_root
 from wicap_assist.db import (
     delete_log_events_for_source,
     get_source,
@@ -16,7 +17,6 @@ from wicap_assist.db import (
 )
 from wicap_assist.util.redact import sha1_text, to_snippet
 
-WICAP_REPO_ROOT = Path("/home/steve/apps/wicap")
 SOAK_PATTERNS = (
     "logs_soak_*/**/*.log",
     "logs_verification_*/**/*.log",
@@ -70,13 +70,14 @@ class LogEvent:
     extra_json: dict[str, int]
 
 
-def scan_soak_log_paths(repo_root: Path = WICAP_REPO_ROOT) -> list[Path]:
+def scan_soak_log_paths(repo_root: Path | None = None) -> list[Path]:
     """Scan configured WICAP soak log patterns under repo root."""
+    resolved_repo_root = (repo_root or wicap_repo_root()).resolve()
     seen: set[str] = set()
     results: list[Path] = []
 
     for pattern in SOAK_PATTERNS:
-        full_pattern = str(repo_root / pattern)
+        full_pattern = str(resolved_repo_root / pattern)
         for hit in sorted(glob.glob(full_pattern, recursive=True)):
             path = Path(hit)
             if not path.is_file():
@@ -195,7 +196,7 @@ def _is_unchanged_source(row: sqlite3.Row | None, *, mtime: float, size: int, ki
     return float(row["mtime"]) == float(mtime) and int(row["size"]) == int(size) and str(row["kind"]) == kind
 
 
-def ingest_soak_logs(conn: sqlite3.Connection, repo_root: Path = WICAP_REPO_ROOT) -> tuple[int, int]:
+def ingest_soak_logs(conn: sqlite3.Connection, repo_root: Path | None = None) -> tuple[int, int]:
     """Ingest soak logs into log_events and return (files_seen, events_added)."""
     files = scan_soak_log_paths(repo_root=repo_root)
     events_added = 0

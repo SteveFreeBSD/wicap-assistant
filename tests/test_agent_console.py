@@ -1,0 +1,101 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+from wicap_assist.agent_console import parse_agent_prompt, run_agent_console
+from wicap_assist.db import connect_db
+
+
+def test_parse_agent_prompt_soak_assist_dry_run() -> None:
+    intent = parse_agent_prompt("start soak for 12 minutes assist dry-run interval 3 minutes")
+    assert intent.kind == "soak"
+    assert int(intent.duration_minutes or 0) == 12
+    assert int(intent.playwright_interval_minutes or 0) == 3
+    assert intent.control_mode == "assist"
+    assert intent.dry_run is True
+
+
+def test_parse_agent_prompt_soak_autonomous() -> None:
+    intent = parse_agent_prompt("run soak for 30 minutes autonomous")
+    assert intent.kind == "soak"
+    assert int(intent.duration_minutes or 0) == 30
+    assert intent.control_mode == "autonomous"
+
+
+def test_run_agent_console_routes_core_intents(tmp_path: Path) -> None:
+    conn = connect_db(tmp_path / "assistant.db")
+    outputs: list[str] = []
+    prompts = iter(
+        [
+            "help",
+            "status",
+            "recommend logs_soak_123",
+            "incident logs_soak_123",
+            "start soak for 5 minutes assist dry-run",
+            "quit",
+        ]
+    )
+
+    soak_calls: list[tuple[int | None, str, bool]] = []
+    recommend_calls: list[str] = []
+    incident_calls: list[str] = []
+
+    def input_fn(_prompt: str) -> str:
+        return next(prompts)
+
+    def output_fn(line: str) -> None:
+        outputs.append(str(line))
+
+    def fake_live_once(_conn) -> str:  # type: ignore[no-untyped-def]
+        return "LIVE_OK"
+
+    def fake_soak_run(_conn, *, intent):  # type: ignore[no-untyped-def]
+        soak_calls.append((intent.duration_minutes, intent.control_mode, intent.dry_run))
+        return {
+            "run_id": None,
+            "exit_code": None,
+            "control_mode": intent.control_mode,
+            "newest_soak_dir": "/home/steve/apps/wicap/logs_soak_123",
+            "incident_path": None,
+            "observation_cycles": 0,
+            "alert_cycles": 0,
+            "down_service_cycles": 0,
+            "control_actions_executed": 0,
+            "operator_guidance": ["Dry-run only guidance."],
+        }
+
+    def fake_recommend(_conn, target: str):  # type: ignore[no-untyped-def]
+        recommend_calls.append(target)
+        return {
+            "recommended_action": "Apply known fix",
+            "confidence": 0.5,
+            "verification_priority": ["python scripts/check_wicap_status.py --local-only"],
+        }
+
+    def fake_incident(_conn, target: str) -> str:  # type: ignore[no-untyped-def]
+        incident_calls.append(target)
+        return "/tmp/incident.md"
+
+    rc = run_agent_console(
+        conn,
+        input_fn=input_fn,
+        output_fn=output_fn,
+        default_control_mode="observe",
+        default_observe_interval_seconds=1.0,
+        live_once_fn=fake_live_once,
+        soak_run_fn=fake_soak_run,
+        recommend_fn=fake_recommend,
+        incident_fn=fake_incident,
+    )
+
+    assert rc == 0
+    assert recommend_calls == ["logs_soak_123"]
+    assert incident_calls == ["logs_soak_123"]
+    assert soak_calls == [(5, "assist", True)]
+    assert any("LIVE_OK" in line for line in outputs)
+    assert any("recommend: action=Apply known fix" in line for line in outputs)
+    assert any("incident: path=/tmp/incident.md" in line for line in outputs)
+    assert any("guide: Dry-run only guidance." in line for line in outputs)
+    assert any("agent: exit" in line for line in outputs)
+
+    conn.close()

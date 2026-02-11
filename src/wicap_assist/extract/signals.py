@@ -6,6 +6,8 @@ from dataclasses import dataclass
 import re
 from typing import Any
 
+from wicap_assist.config import wicap_repo_root
+from wicap_assist.settings import codex_home, repo_url_matches_wicap
 from wicap_assist.util.redact import sha1_text, to_snippet
 
 
@@ -75,9 +77,10 @@ def session_gate(
     has_operational_signals: bool,
 ) -> bool:
     """Apply WICAP gate rules for a session."""
-    if cwd and cwd.startswith("/home/steve/apps/wicap"):
+    repo_root = str(wicap_repo_root())
+    if cwd and cwd.startswith(repo_root):
         return True
-    if repo_url and "SteveFreeBSD/wicap" in repo_url:
+    if repo_url_matches_wicap(repo_url):
         return True
     return bool(has_wicap_text and has_operational_signals)
 
@@ -110,6 +113,7 @@ def extract_operational_signals(text: str, ts: str | None = None) -> list[Signal
     """Extract command/path/error/outcome signals from text block."""
     results: list[Signal] = []
     seen: set[tuple[str, str]] = set()
+    codex_root = str(codex_home()).rstrip("/") + "/"
 
     for line_number, raw_line in enumerate(text.splitlines(), start=1):
         if _is_noise(raw_line):
@@ -135,7 +139,7 @@ def extract_operational_signals(text: str, ts: str | None = None) -> list[Signal
             value
             for value in path_matches
             if value
-            and not value.startswith("/home/steve/.codex")
+            and not value.startswith(codex_root)
             and "sessions/YYYY/MM/DD" not in value
             and "sessions/yyyy/mm/dd" not in value
         ]

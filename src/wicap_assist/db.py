@@ -7,6 +7,8 @@ from pathlib import Path
 import sqlite3
 from typing import Any
 
+from wicap_assist.util.time import utc_now_iso
+
 DEFAULT_DB_PATH = Path("data/assistant.db")
 
 _SCHEMA_SQL = """
@@ -121,7 +123,85 @@ CREATE TABLE IF NOT EXISTS verification_outcomes (
     ts TEXT,
     FOREIGN KEY(conversation_pk) REFERENCES conversations(id) ON DELETE SET NULL
 );
+
+CREATE TABLE IF NOT EXISTS soak_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    started_ts TEXT NOT NULL,
+    ended_ts TEXT NOT NULL,
+    exit_code INTEGER NOT NULL,
+    runner_path TEXT NOT NULL,
+    args_json TEXT NOT NULL,
+    run_dir TEXT NOT NULL,
+    newest_soak_dir TEXT,
+    incident_path TEXT
+);
+
+CREATE TABLE IF NOT EXISTS live_observations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts TEXT NOT NULL,
+    service_status_json TEXT NOT NULL,
+    top_signatures_json TEXT NOT NULL,
+    recommended_json TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS control_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    soak_run_id INTEGER,
+    ts TEXT NOT NULL,
+    decision TEXT NOT NULL,
+    action TEXT,
+    status TEXT NOT NULL,
+    detail_json TEXT NOT NULL,
+    FOREIGN KEY(soak_run_id) REFERENCES soak_runs(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS control_sessions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    soak_run_id INTEGER,
+    started_ts TEXT NOT NULL,
+    ended_ts TEXT,
+    last_heartbeat_ts TEXT,
+    mode TEXT NOT NULL,
+    status TEXT NOT NULL,
+    current_phase TEXT,
+    handoff_state TEXT,
+    metadata_json TEXT NOT NULL,
+    FOREIGN KEY(soak_run_id) REFERENCES soak_runs(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS control_session_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    control_session_id INTEGER NOT NULL,
+    ts TEXT NOT NULL,
+    phase TEXT,
+    status TEXT NOT NULL,
+    detail_json TEXT NOT NULL,
+    FOREIGN KEY(control_session_id) REFERENCES control_sessions(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    version INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    applied_ts TEXT NOT NULL
+);
 """
+
+_MIGRATIONS: tuple[tuple[int, str, tuple[str, ...]], ...] = (
+    (
+        1,
+        "core_index_hardening",
+        (
+            "CREATE INDEX IF NOT EXISTS idx_signals_category_fingerprint_session ON signals(category, fingerprint, session_pk)",
+            "CREATE INDEX IF NOT EXISTS idx_signals_ts ON signals(ts)",
+            "CREATE INDEX IF NOT EXISTS idx_log_events_category_ts_fingerprint ON log_events(category, ts_text, fingerprint)",
+            "CREATE INDEX IF NOT EXISTS idx_log_events_file_path ON log_events(file_path)",
+            "CREATE INDEX IF NOT EXISTS idx_sessions_ts_last_is_wicap ON sessions(ts_last, is_wicap)",
+            "CREATE INDEX IF NOT EXISTS idx_verification_outcomes_signature_ts ON verification_outcomes(signature, ts)",
+            "CREATE INDEX IF NOT EXISTS idx_control_events_soak_run_ts ON control_events(soak_run_id, ts)",
+            "CREATE INDEX IF NOT EXISTS idx_control_sessions_status_started ON control_sessions(status, started_ts)",
+        ),
+    ),
+)
 
 
 def connect_db(path: str | Path = DEFAULT_DB_PATH) -> sqlite3.Connection:
@@ -132,10 +212,40 @@ def connect_db(path: str | Path = DEFAULT_DB_PATH) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    _configure_connection_pragmas(conn)
     conn.executescript(_SCHEMA_SQL)
     _ensure_sessions_git_columns(conn)
+    _ensure_control_session_columns(conn)
+    _apply_migrations(conn)
     conn.commit()
     return conn
+
+
+def _configure_connection_pragmas(conn: sqlite3.Connection) -> None:
+    """Apply connection pragmas that improve write/read resilience."""
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+    except sqlite3.DatabaseError:
+        # Fallback silently (e.g., unsupported FS mode).
+        pass
+    try:
+        conn.execute("PRAGMA busy_timeout=5000")
+    except sqlite3.DatabaseError:
+        pass
+
+
+def _apply_migrations(conn: sqlite3.Connection) -> None:
+    rows = conn.execute("SELECT version FROM schema_migrations").fetchall()
+    applied = {int(row["version"]) for row in rows}
+    for version, name, statements in _MIGRATIONS:
+        if version in applied:
+            continue
+        for statement in statements:
+            conn.execute(statement)
+        conn.execute(
+            "INSERT INTO schema_migrations(version, name, applied_ts) VALUES(?, ?, ?)",
+            (int(version), str(name), utc_now_iso()),
+        )
 
 
 def _ensure_sessions_git_columns(conn: sqlite3.Connection) -> None:
@@ -149,6 +259,17 @@ def _ensure_sessions_git_columns(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE sessions ADD COLUMN branch TEXT")
     if "commit_hash" not in columns:
         conn.execute("ALTER TABLE sessions ADD COLUMN commit_hash TEXT")
+
+
+def _ensure_control_session_columns(conn: sqlite3.Connection) -> None:
+    """Ensure legacy control_sessions tables have heartbeat/handoff columns."""
+    rows = conn.execute("PRAGMA table_info(control_sessions)").fetchall()
+    columns = {str(row["name"]) for row in rows}
+
+    if "last_heartbeat_ts" not in columns:
+        conn.execute("ALTER TABLE control_sessions ADD COLUMN last_heartbeat_ts TEXT")
+    if "handoff_state" not in columns:
+        conn.execute("ALTER TABLE control_sessions ADD COLUMN handoff_state TEXT")
 
 
 def upsert_source(conn: sqlite3.Connection, kind: str, path: str, mtime: float, size: int) -> int:
@@ -565,3 +686,268 @@ def query_outcomes_for_signature(conn: sqlite3.Connection, signature: str) -> li
         """,
         (q,),
     ).fetchall()
+
+
+# ---------------------------------------------------------------------------
+# Soak run helpers
+# ---------------------------------------------------------------------------
+
+
+def insert_soak_run(
+    conn: sqlite3.Connection,
+    *,
+    started_ts: str,
+    ended_ts: str,
+    exit_code: int,
+    runner_path: str,
+    args_json: dict[str, Any],
+    run_dir: str,
+    newest_soak_dir: str | None,
+    incident_path: str | None,
+) -> int:
+    """Insert one supervised soak run row and return primary key."""
+    cur = conn.execute(
+        """
+        INSERT INTO soak_runs(
+            started_ts, ended_ts, exit_code, runner_path, args_json,
+            run_dir, newest_soak_dir, incident_path
+        )
+        VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            started_ts,
+            ended_ts,
+            int(exit_code),
+            runner_path,
+            json.dumps(args_json, sort_keys=True),
+            run_dir,
+            newest_soak_dir,
+            incident_path,
+        ),
+    )
+    if cur.lastrowid is None:
+        raise RuntimeError("Failed to insert soak run row")
+    return int(cur.lastrowid)
+
+
+def insert_live_observation(
+    conn: sqlite3.Connection,
+    *,
+    ts: str,
+    service_status_json: dict[str, Any],
+    top_signatures_json: list[dict[str, Any]],
+    recommended_json: list[dict[str, Any]],
+) -> int:
+    """Insert one live monitor observation row and return primary key."""
+    cur = conn.execute(
+        """
+        INSERT INTO live_observations(
+            ts, service_status_json, top_signatures_json, recommended_json
+        )
+        VALUES(?, ?, ?, ?)
+        """,
+        (
+            ts,
+            json.dumps(service_status_json, sort_keys=True),
+            json.dumps(top_signatures_json, sort_keys=True),
+            json.dumps(recommended_json, sort_keys=True),
+        ),
+    )
+    if cur.lastrowid is None:
+        raise RuntimeError("Failed to insert live observation row")
+    return int(cur.lastrowid)
+
+
+def insert_control_event(
+    conn: sqlite3.Connection,
+    *,
+    soak_run_id: int | None,
+    ts: str,
+    decision: str,
+    action: str | None,
+    status: str,
+    detail_json: dict[str, Any] | None = None,
+) -> int:
+    """Insert one control event row and return primary key."""
+    cur = conn.execute(
+        """
+        INSERT INTO control_events(
+            soak_run_id, ts, decision, action, status, detail_json
+        )
+        VALUES(?, ?, ?, ?, ?, ?)
+        """,
+        (
+            soak_run_id,
+            ts,
+            decision,
+            action,
+            status,
+            json.dumps(detail_json or {}, sort_keys=True),
+        ),
+    )
+    if cur.lastrowid is None:
+        raise RuntimeError("Failed to insert control event row")
+    return int(cur.lastrowid)
+
+
+def insert_control_session(
+    conn: sqlite3.Connection,
+    *,
+    soak_run_id: int | None,
+    started_ts: str,
+    last_heartbeat_ts: str | None = None,
+    mode: str,
+    status: str,
+    current_phase: str | None,
+    handoff_state: str | None = None,
+    metadata_json: dict[str, Any] | None = None,
+) -> int:
+    """Insert one control session row and return primary key."""
+    cur = conn.execute(
+        """
+        INSERT INTO control_sessions(
+            soak_run_id, started_ts, ended_ts, last_heartbeat_ts, mode, status, current_phase, handoff_state, metadata_json
+        )
+        VALUES(?, ?, NULL, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            soak_run_id,
+            started_ts,
+            last_heartbeat_ts if last_heartbeat_ts is not None else started_ts,
+            mode,
+            status,
+            current_phase,
+            handoff_state,
+            json.dumps(metadata_json or {}, sort_keys=True),
+        ),
+    )
+    if cur.lastrowid is None:
+        raise RuntimeError("Failed to insert control session row")
+    return int(cur.lastrowid)
+
+
+def update_control_session(
+    conn: sqlite3.Connection,
+    *,
+    control_session_id: int,
+    soak_run_id: int | None = None,
+    ended_ts: str | None = None,
+    last_heartbeat_ts: str | None = None,
+    status: str | None = None,
+    current_phase: str | None = None,
+    handoff_state: str | None = None,
+    metadata_json: dict[str, Any] | None = None,
+) -> None:
+    """Update one control session row with explicit fields."""
+    row = conn.execute(
+        """
+        SELECT soak_run_id, ended_ts, last_heartbeat_ts, status, current_phase, handoff_state, metadata_json
+        FROM control_sessions
+        WHERE id = ?
+        """,
+        (control_session_id,),
+    ).fetchone()
+    if row is None:
+        raise RuntimeError(f"Unknown control session id: {control_session_id}")
+
+    existing_metadata: dict[str, Any] = {}
+    raw_meta = row["metadata_json"]
+    if isinstance(raw_meta, str) and raw_meta.strip():
+        try:
+            parsed = json.loads(raw_meta)
+            if isinstance(parsed, dict):
+                existing_metadata = parsed
+        except json.JSONDecodeError:
+            existing_metadata = {}
+    if metadata_json:
+        existing_metadata.update(metadata_json)
+
+    conn.execute(
+        """
+        UPDATE control_sessions
+        SET soak_run_id = ?, ended_ts = ?, last_heartbeat_ts = ?, status = ?, current_phase = ?, handoff_state = ?, metadata_json = ?
+        WHERE id = ?
+        """,
+        (
+            row["soak_run_id"] if soak_run_id is None else soak_run_id,
+            row["ended_ts"] if ended_ts is None else ended_ts,
+            row["last_heartbeat_ts"] if last_heartbeat_ts is None else last_heartbeat_ts,
+            row["status"] if status is None else status,
+            row["current_phase"] if current_phase is None else current_phase,
+            row["handoff_state"] if handoff_state is None else handoff_state,
+            json.dumps(existing_metadata, sort_keys=True),
+            control_session_id,
+        ),
+    )
+
+
+def insert_control_session_event(
+    conn: sqlite3.Connection,
+    *,
+    control_session_id: int,
+    ts: str,
+    phase: str | None,
+    status: str,
+    detail_json: dict[str, Any] | None = None,
+) -> int:
+    """Insert one control session phase/status event and return primary key."""
+    cur = conn.execute(
+        """
+        INSERT INTO control_session_events(
+            control_session_id, ts, phase, status, detail_json
+        )
+        VALUES(?, ?, ?, ?, ?)
+        """,
+        (
+            int(control_session_id),
+            ts,
+            phase,
+            status,
+            json.dumps(detail_json or {}, sort_keys=True),
+        ),
+    )
+    if cur.lastrowid is None:
+        raise RuntimeError("Failed to insert control session event row")
+    return int(cur.lastrowid)
+
+
+def close_running_control_sessions(
+    conn: sqlite3.Connection,
+    *,
+    ended_ts: str,
+    reason: str,
+    exclude_session_id: int | None = None,
+) -> int:
+    """Close any stale running control sessions before a new session starts."""
+    rows = conn.execute(
+        """
+        SELECT id
+        FROM control_sessions
+        WHERE ended_ts IS NULL
+          AND status IN ('running', 'escalated')
+        """
+    ).fetchall()
+    count = 0
+    for row in rows:
+        session_id = int(row["id"])
+        if exclude_session_id is not None and int(session_id) == int(exclude_session_id):
+            continue
+        update_control_session(
+            conn,
+            control_session_id=session_id,
+            ended_ts=ended_ts,
+            status="interrupted",
+            current_phase="interrupted",
+            handoff_state="interrupted",
+            metadata_json={"interruption_reason": reason},
+        )
+        insert_control_session_event(
+            conn,
+            control_session_id=session_id,
+            ts=ended_ts,
+            phase="interrupted",
+            status="interrupted",
+            detail_json={"reason": reason},
+        )
+        count += 1
+    return count

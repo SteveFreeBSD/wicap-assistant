@@ -59,3 +59,46 @@ def test_ingest_harness_scripts_extracts_inventory(tmp_path: Path) -> None:
 
     conn.close()
 
+
+def test_ingest_harness_scripts_includes_shell_runbooks_and_env_tools(tmp_path: Path) -> None:
+    conn = connect_db(tmp_path / "assistant.db")
+
+    script = tmp_path / "run_soak.sh"
+    script.write_text(
+        "\n".join(
+            [
+                "#!/usr/bin/env bash",
+                "set -euo pipefail",
+                "export WICAP_REPO_ROOT=/wicap",
+                "env WICAP_MODE=assist python3 tests/soak_test.py --duration-minutes 5",
+                "docker compose up -d",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    files_seen, summary = ingest_harness_scripts(conn, repo_root=tmp_path)
+    assert files_seen == 1
+    assert summary.total_scripts == 1
+
+    row = conn.execute(
+        """
+        SELECT script_path, commands_json, tools_json, env_vars_json
+        FROM harness_scripts
+        """
+    ).fetchone()
+    assert row is not None
+    assert row["script_path"] == str(script)
+
+    commands = json.loads(row["commands_json"])
+    tools = json.loads(row["tools_json"])
+    env_vars = json.loads(row["env_vars_json"])
+
+    assert "docker compose up -d" in commands
+    assert any("python3 tests/soak_test.py" in cmd for cmd in commands)
+    assert "python3" in tools
+    assert "docker" in tools
+    assert "WICAP_REPO_ROOT" in env_vars
+    assert "WICAP_MODE" in env_vars
+
+    conn.close()

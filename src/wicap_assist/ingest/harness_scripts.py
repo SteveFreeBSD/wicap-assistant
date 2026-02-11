@@ -13,18 +13,23 @@ import re
 import shlex
 import sqlite3
 
+from wicap_assist.config import wicap_repo_root
 from wicap_assist.db import upsert_harness_script
-
-WICAP_REPO_ROOT = Path("/home/steve/apps/wicap")
 
 _INCLUDE_PATTERNS = (
     "*soak*.py",
     "*runner*.py",
     "*harness*.py",
+    "*soak*.sh",
+    "*runner*.sh",
+    "*harness*.sh",
 )
 _INCLUDE_NAMES = {
     "start_wicap.py",
     "stop_wicap.py",
+    "run_soak.sh",
+    "run_docker_soak.sh",
+    "run_live_verification.sh",
 }
 _SKIP_DIRS = {
     ".git",
@@ -55,6 +60,22 @@ _COMMAND_CALLS = {
     "subprocess.check_call",
     "subprocess.check_output",
     "os.system",
+}
+_SHELL_KEYWORDS = {
+    "if",
+    "then",
+    "else",
+    "elif",
+    "fi",
+    "for",
+    "while",
+    "do",
+    "done",
+    "case",
+    "esac",
+    "function",
+    "{",
+    "}",
 }
 
 
@@ -153,9 +174,26 @@ def _tool_from_command(command: str) -> str | None:
     if not parts:
         return None
 
-    first = parts[0]
-    if first in {"sudo", "env"} and len(parts) > 1:
-        return parts[1]
+    idx = 0
+    first = parts[idx]
+    if first == "sudo":
+        idx += 1
+        while idx < len(parts) and parts[idx].startswith("-"):
+            idx += 1
+        if idx >= len(parts):
+            return None
+        first = parts[idx]
+
+    if first == "env":
+        idx += 1
+        while idx < len(parts):
+            token = parts[idx]
+            if "=" in token and not token.startswith("="):
+                idx += 1
+                continue
+            return token
+        return None
+
     return first
 
 
@@ -187,8 +225,6 @@ def _extract_env_vars(tree: ast.AST) -> list[str]:
             target = node.slice
             if isinstance(target, ast.Constant) and isinstance(target.value, str):
                 value = target.value
-            elif isinstance(target, ast.Index):  # pragma: no cover - py<3.9 compatibility style
-                value = _literal_str(target.value)  # type: ignore[arg-type]
             else:
                 value = None
 
@@ -196,6 +232,51 @@ def _extract_env_vars(tree: ast.AST) -> list[str]:
                 names.add(value)
 
     return sorted(names)
+
+
+def _extract_env_vars_shell(text: str) -> list[str]:
+    names: set[str] = set()
+    for match in re.findall(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?", text):
+        names.add(match)
+    for match in re.findall(r"^\s*export\s+([A-Za-z_][A-Za-z0-9_]*)=", text, flags=re.MULTILINE):
+        names.add(match)
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("env "):
+            continue
+        for token in stripped.split()[1:]:
+            if "=" not in token:
+                break
+            key = token.split("=", 1)[0].strip()
+            if re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", key):
+                names.add(key)
+    return sorted(names)
+
+
+def _extract_shell_commands(text: str) -> list[str]:
+    commands: list[str] = []
+    seen: set[str] = set()
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        line = re.sub(r"\s+#.*$", "", line).strip()
+        if not line:
+            continue
+        fragments = [part.strip() for part in re.split(r"\s*(?:&&|\|\||;)\s*", line) if part.strip()]
+        for fragment in fragments:
+            token = fragment.split(maxsplit=1)[0].strip()
+            if token in _SHELL_KEYWORDS:
+                continue
+            if fragment.startswith(("export ", "local ", "readonly ", "declare ")):
+                continue
+            normalized = re.sub(r"\s+", " ", fragment).strip()
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            commands.append(normalized)
+    commands.sort()
+    return commands
 
 
 def _role_from_features(path: Path, tree: ast.AST, text: str, commands: list[str]) -> str:
@@ -263,15 +344,20 @@ def _role_from_features(path: Path, tree: ast.AST, text: str, commands: list[str
 def analyze_harness_script(path: Path) -> HarnessScript:
     """Analyze one harness-like script file."""
     text = path.read_text(encoding="utf-8", errors="replace")
-    try:
-        tree = ast.parse(text, filename=str(path))
-    except SyntaxError:
-        # Fall back to an empty AST-like module; regex based features still work.
+    if path.suffix == ".py":
+        try:
+            tree = ast.parse(text, filename=str(path))
+        except SyntaxError:
+            # Fall back to an empty AST-like module; regex based features still work.
+            tree = ast.parse("")
+        commands = _extract_commands(tree)
+        env_vars = _extract_env_vars(tree)
+    else:
         tree = ast.parse("")
+        commands = _extract_shell_commands(text)
+        env_vars = _extract_env_vars_shell(text)
 
-    commands = _extract_commands(tree)
     tools = _extract_tools(commands)
-    env_vars = _extract_env_vars(tree)
     role = _role_from_features(path, tree, text, commands)
     last_modified = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).isoformat(timespec="seconds")
 
@@ -285,12 +371,15 @@ def analyze_harness_script(path: Path) -> HarnessScript:
     )
 
 
-def scan_harness_paths(repo_root: Path = WICAP_REPO_ROOT) -> list[Path]:
+def scan_harness_paths(repo_root: Path | None = None) -> list[Path]:
     """Find harness-like scripts under repo root."""
+    resolved_repo_root = (repo_root or wicap_repo_root()).resolve()
     files: list[Path] = []
     seen: set[str] = set()
 
-    for path in repo_root.rglob("*.py"):
+    for path in resolved_repo_root.rglob("*"):
+        if path.suffix not in {".py", ".sh"}:
+            continue
         if any(part in _SKIP_DIRS for part in path.parts):
             continue
 
@@ -308,7 +397,7 @@ def scan_harness_paths(repo_root: Path = WICAP_REPO_ROOT) -> list[Path]:
 def ingest_harness_scripts(
     conn: sqlite3.Connection,
     *,
-    repo_root: Path = WICAP_REPO_ROOT,
+    repo_root: Path | None = None,
 ) -> tuple[int, HarnessSummary]:
     """Ingest harness script inventory and return file count + summary."""
     paths = scan_harness_paths(repo_root=repo_root)
@@ -355,4 +444,3 @@ def ingest_harness_scripts(
         top_commands=sorted(command_counts.items(), key=lambda item: (-item[1], item[0]))[:10],
     )
     return len(paths), summary
-

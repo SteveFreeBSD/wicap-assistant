@@ -14,14 +14,15 @@ from typing import Any
 
 from wicap_assist.harness_match import find_relevant_harness_scripts
 from wicap_assist.ingest.soak_logs import _categories_for_line
-from wicap_assist.playbooks import PLAYBOOKS_DIR
-from wicap_assist.util.evidence import extract_tokens, normalize_signature
+from wicap_assist.evidence_query import (
+    query_recent_related_session,
+    query_verification_track_record,
+)
+from wicap_assist.playbooks import default_playbooks_dir
+from wicap_assist.config import wicap_repo_root
+from wicap_assist.util.evidence import normalize_signature
 from wicap_assist.util.redact import to_snippet
 
-DEFAULT_PATH_SPECS = (
-    "/home/steve/apps/wicap/logs_soak_*",
-    "/home/steve/apps/wicap/wicap.log",
-)
 _ALERT_CATEGORIES = {"error", "docker_fail", "pytest_fail"}
 
 
@@ -90,6 +91,20 @@ def _has_wildcards(value: str) -> bool:
     return any(char in value for char in "*?[]")
 
 
+def default_path_specs(*, repo_root: Path | None = None) -> tuple[str, ...]:
+    resolved_root = (repo_root or wicap_repo_root()).resolve()
+    return (
+        str(resolved_root / "logs_soak_*/*.log"),
+        str(resolved_root / "logs_soak_*/*/*.log"),
+        str(resolved_root / "logs_verification_*/*.log"),
+        str(resolved_root / "logs_verification_*/*/*.log"),
+        str(resolved_root / "soak_test_*.log"),
+        str(resolved_root / "wicap.log"),
+        str(resolved_root / "wicap_verified.log"),
+        str(resolved_root / "wicap-ui/ui.log"),
+    )
+
+
 def _expand_path_spec(spec: str) -> list[Path]:
     if _has_wildcards(spec):
         hits = [Path(hit) for hit in sorted(glob.glob(spec, recursive=True))]
@@ -111,9 +126,9 @@ def _expand_path_spec(spec: str) -> list[Path]:
     return out
 
 
-def resolve_monitor_files(path_specs: list[str] | None) -> list[Path]:
+def resolve_monitor_files(path_specs: list[str] | None, *, repo_root: Path | None = None) -> list[Path]:
     """Resolve monitored files from explicit path specs or defaults."""
-    specs = path_specs if path_specs else list(DEFAULT_PATH_SPECS)
+    specs = path_specs if path_specs else list(default_path_specs(repo_root=repo_root))
     seen: set[str] = set()
     files: list[Path] = []
     for spec in specs:
@@ -127,13 +142,14 @@ def resolve_monitor_files(path_specs: list[str] | None) -> list[Path]:
     return files
 
 
-def load_playbook_entries(playbooks_dir: Path = PLAYBOOKS_DIR) -> dict[tuple[str, str], PlaybookEntry]:
+def load_playbook_entries(playbooks_dir: Path | None = None) -> dict[tuple[str, str], PlaybookEntry]:
     """Load playbook category/signature and first fix step for matching."""
+    resolved_playbooks_dir = (playbooks_dir or default_playbooks_dir()).resolve()
     entries: dict[tuple[str, str], PlaybookEntry] = {}
-    if not playbooks_dir.exists():
+    if not resolved_playbooks_dir.exists():
         return entries
 
-    for path in sorted(playbooks_dir.glob("*.md")):
+    for path in sorted(resolved_playbooks_dir.glob("*.md")):
         if path.name.upper() == "INDEX.MD":
             continue
 
@@ -171,40 +187,12 @@ def load_playbook_entries(playbooks_dir: Path = PLAYBOOKS_DIR) -> dict[tuple[str
     return entries
 
 
-def _signature_tokens(signature: str, limit: int = 6) -> list[str]:
-    return extract_tokens(signature, limit=limit, stopwords={"n", "hex", "mac"})
-
-
 def _recent_related_session(
     conn: sqlite3.Connection,
     *,
     signature: str,
 ) -> tuple[str | None, str | None]:
-    tokens = _signature_tokens(signature, limit=6)
-    if not tokens:
-        return None, None
-
-    where = " OR ".join("lower(sg.snippet) LIKE ?" for _ in tokens)
-    params = [f"%{token}%" for token in tokens]
-
-    rows = conn.execute(
-        f"""
-        SELECT s.session_id, s.ts_last
-        FROM signals AS sg
-        JOIN sessions AS s ON s.id = sg.session_pk
-        WHERE s.is_wicap = 1
-          AND sg.category IN ('errors', 'commands', 'file_paths', 'outcomes')
-          AND ({where})
-        ORDER BY coalesce(s.ts_last, '') DESC, sg.id DESC
-        LIMIT 1
-        """,
-        params,
-    ).fetchall()
-
-    if not rows:
-        return None, None
-    row = rows[0]
-    return row["session_id"], row["ts_last"]
+    return query_recent_related_session(conn, signature)
 
 
 def _query_verification_track_record(
@@ -214,41 +202,14 @@ def _query_verification_track_record(
     """Return (passes, fails, relapse_risk) for a signature."""
     if not _table_exists(conn, "verification_outcomes"):
         return 0, 0, False
-
-    tokens = _signature_tokens(signature, limit=6)
-    if not tokens:
+    record = query_verification_track_record(conn, signature)
+    if record is None:
         return 0, 0, False
-
-    where = " OR ".join("lower(signature) LIKE ?" for _ in tokens)
-    args = [f"%{token}%" for token in tokens]
-    rows = conn.execute(
-        f"""
-        SELECT outcome
-        FROM verification_outcomes
-        WHERE {where}
-        ORDER BY coalesce(ts, '') ASC
-        """,
-        args,
-    ).fetchall()
-
-    if not rows:
-        return 0, 0, False
-
-    passes = sum(1 for r in rows if str(r["outcome"]).strip().lower() == "pass")
-    fails = sum(1 for r in rows if str(r["outcome"]).strip().lower() == "fail")
-
-    # Relapse: a fail after at least one pass
-    seen_pass = False
-    relapse = False
-    for r in rows:
-        outcome = str(r["outcome"]).strip().lower()
-        if outcome == "pass":
-            seen_pass = True
-        elif outcome == "fail" and seen_pass:
-            relapse = True
-            break
-
-    return passes, fails, relapse
+    return (
+        int(record.get("passes", 0)),
+        int(record.get("fails", 0)),
+        bool(record.get("relapse_detected", False)),
+    )
 
 
 def _read_new_lines(

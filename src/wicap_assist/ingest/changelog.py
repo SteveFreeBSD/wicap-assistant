@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 import sqlite3
 
+from wicap_assist.config import wicap_changelog_path
 from wicap_assist.db import (
     delete_changelog_entries_for_source,
     get_source,
@@ -15,7 +16,7 @@ from wicap_assist.db import (
 )
 from wicap_assist.util.redact import sha1_text, to_snippet
 
-WICAP_CHANGELOG = Path("/home/steve/apps/wicap/CHANGELOG.md")
+WICAP_CHANGELOG = wicap_changelog_path()
 
 _RELEASE_RE = re.compile(r"^##\s+\[(.+?)\]")
 _SECTION_RE = re.compile(r"^###\s+(Added|Fixed|Changed)\b", re.IGNORECASE)

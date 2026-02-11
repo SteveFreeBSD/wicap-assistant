@@ -8,6 +8,8 @@ import re
 import sqlite3
 from typing import Any, Callable
 
+from wicap_assist.config import wicap_repo_root
+from wicap_assist.evidence_query import where_like
 from wicap_assist.harness_match import find_relevant_harness_scripts
 from wicap_assist.ingest.git_history import GitCommit, compute_window_from_mtimes, load_git_commits
 from wicap_assist.util.evidence import (
@@ -16,8 +18,14 @@ from wicap_assist.util.evidence import (
     normalize_signature as _normalize_signature,
 )
 
-WICAP_REPO_ROOT = Path("/home/steve/apps/wicap")
-PLAYBOOKS_DIR = WICAP_REPO_ROOT / "docs" / "playbooks"
+def default_playbooks_dir(*, repo_root: Path | None = None) -> Path:
+    resolved_repo_root = repo_root or wicap_repo_root()
+    return resolved_repo_root / "docs" / "playbooks"
+
+
+# Compatibility exports for existing imports; do not use as function defaults.
+WICAP_REPO_ROOT = wicap_repo_root()
+PLAYBOOKS_DIR = default_playbooks_dir(repo_root=WICAP_REPO_ROOT)
 INDEX_PATH = PLAYBOOKS_DIR / "INDEX.md"
 
 _CATEGORIES = ("error", "docker_fail", "pytest_fail")
@@ -105,11 +113,9 @@ def _related_sessions(conn: sqlite3.Connection, cluster: dict[str, Any]) -> list
         token_set.add(token)
 
     tokens = sorted(token_set)
-    if not tokens:
+    where, args = where_like("sg.snippet", tokens)
+    if not where:
         return []
-
-    where = " OR ".join("lower(sg.snippet) LIKE ?" for _ in tokens)
-    args = [f"%{token}%" for token in tokens]
 
     rows = conn.execute(
         f"""
@@ -519,18 +525,20 @@ def generate_playbooks(
     conn: sqlite3.Connection,
     *,
     top_n: int = 5,
-    playbooks_dir: Path = PLAYBOOKS_DIR,
-    repo_root: Path = WICAP_REPO_ROOT,
+    playbooks_dir: Path | None = None,
+    repo_root: Path | None = None,
     load_commits_fn: Callable[..., list[GitCommit]] = load_git_commits,
 ) -> list[Path]:
     """Generate or update top-N playbooks and return their paths."""
+    resolved_repo_root = repo_root or wicap_repo_root()
+    resolved_playbooks_dir = playbooks_dir or default_playbooks_dir(repo_root=resolved_repo_root)
     clusters = _cluster_failures(conn, top_n=max(1, int(top_n)))
     if not clusters:
-        playbooks_dir.mkdir(parents=True, exist_ok=True)
-        _update_index(playbooks_dir, [])
+        resolved_playbooks_dir.mkdir(parents=True, exist_ok=True)
+        _update_index(resolved_playbooks_dir, [])
         return []
 
-    playbooks_dir.mkdir(parents=True, exist_ok=True)
+    resolved_playbooks_dir.mkdir(parents=True, exist_ok=True)
     generated_meta: list[dict[str, Any]] = []
     generated_paths: list[Path] = []
 
@@ -539,7 +547,7 @@ def generate_playbooks(
         commits = _related_commits(
             cluster,
             sessions,
-            repo_root=repo_root,
+            repo_root=resolved_repo_root,
             load_commits_fn=load_commits_fn,
         )
         fix_steps = _build_fix_steps(cluster, sessions)
@@ -554,7 +562,7 @@ def generate_playbooks(
 
         slug = _slugify(str(cluster["signature"]))
         filename = f"{cluster['category']}-{slug}.md"
-        path = playbooks_dir / filename
+        path = resolved_playbooks_dir / filename
 
         markdown = _render_playbook(
             cluster,
@@ -574,5 +582,5 @@ def generate_playbooks(
             }
         )
 
-    _update_index(playbooks_dir, generated_meta)
+    _update_index(resolved_playbooks_dir, generated_meta)
     return generated_paths

@@ -12,6 +12,7 @@ from wicap_assist.backfill_report import (
     format_backfill_report_text,
     generate_backfill_report,
 )
+from wicap_assist.agent_console import run_agent_console
 from wicap_assist.bundle import build_bundle, bundle_to_json, format_bundle_text
 from wicap_assist.changelog_stats import collect_changelog_stats, format_changelog_stats_text
 from wicap_assist.daily_report import (
@@ -50,11 +51,27 @@ from wicap_assist.cross_pattern import (
     format_chronic_patterns_text,
 )
 from wicap_assist.incident import load_bundle_json, write_incident_report
+from wicap_assist.live import run_live_monitor
 from wicap_assist.guardian import run_guardian
 from wicap_assist.playbooks import generate_playbooks
 from wicap_assist.recommend import build_recommendation, recommendation_to_json
+from wicap_assist.runtime_contract import (
+    format_runtime_contract_report_text,
+    run_runtime_contract_check,
+    runtime_contract_report_to_json,
+)
 from wicap_assist.rollup import format_rollup_text, generate_rollup, rollup_to_json
+from wicap_assist.soak_run import run_supervised_soak
 from wicap_assist.util.time import utc_now_iso
+
+
+def _normalize_control_mode(value: str) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized == "monitor":
+        return "observe"
+    if normalized in {"observe", "assist", "autonomous"}:
+        return normalized
+    raise ValueError(f"invalid control mode: {value}")
 
 
 def _run_ingest(
@@ -279,6 +296,324 @@ def _run_changelog_stats(db_path: Path) -> int:
     return 0
 
 
+def _run_contract_check(
+    *,
+    contract_path: Path | None,
+    as_json: bool,
+    enforce: bool,
+) -> int:
+    report = run_runtime_contract_check(contract_path=contract_path)
+    if as_json:
+        print(runtime_contract_report_to_json(report))
+    else:
+        print(format_runtime_contract_report_text(report))
+    if enforce and str(report.get("status")) != "pass":
+        return 2
+    return 0
+
+
+def _run_soak_run(
+    db_path: Path,
+    *,
+    duration_minutes: int | None,
+    playwright_interval_minutes: int | None,
+    baseline_path: Path | None,
+    baseline_update: bool | None,
+    dry_run: bool,
+    observe_interval_seconds: float,
+    control_mode: str,
+    control_check_threshold: int | None,
+    control_recover_threshold: int | None,
+    control_max_recover_attempts: int | None,
+    control_action_cooldown_cycles: int | None,
+    stop_on_escalation: bool,
+    require_runtime_contract: bool,
+    runtime_contract_path: Path | None,
+) -> int:
+    normalized_control_mode = _normalize_control_mode(control_mode)
+    contract_report = run_runtime_contract_check(contract_path=runtime_contract_path)
+    print(
+        "[soak-run] runtime_contract "
+        f"status={contract_report.get('status')} "
+        f"version={contract_report.get('contract_version')} "
+        f"path={contract_report.get('contract_path')}",
+        flush=True,
+    )
+    if bool(require_runtime_contract) and str(contract_report.get("status")) != "pass":
+        print(
+            "[soak-run][guide] Runtime contract gate failed; refusing to start soak.",
+            flush=True,
+        )
+        return 2
+
+    def _progress(event: dict[str, object]) -> None:
+        kind = str(event.get("event", "")).strip()
+        if not kind:
+            return
+
+        if kind == "phase":
+            print(
+                f"[soak-run] phase={event.get('phase')} status={event.get('status')} ts={event.get('ts')}",
+                flush=True,
+            )
+            return
+
+        if kind == "runner_start":
+            print(
+                f"[soak-run] runner_start timeout_seconds={event.get('timeout_seconds')} "
+                f"managed_observe={event.get('managed_observe')}",
+                flush=True,
+            )
+            return
+
+        if kind == "observe_cycle":
+            cycle = event.get("cycle")
+            alert = bool(event.get("alert"))
+            down_services = event.get("down_services", [])
+            top_signature = str(event.get("top_signature", "")).strip()
+            top_piece = f" top_signature={top_signature}" if top_signature else ""
+            print(
+                f"[soak-run] observe cycle={cycle} alert={alert} down_services={len(down_services) if isinstance(down_services, list) else 0}{top_piece}",
+                flush=True,
+            )
+            return
+
+        if kind == "run_complete":
+            print(
+                f"[soak-run] run_complete run_id={event.get('run_id')} "
+                f"control_session_id={event.get('control_session_id')} "
+                f"exit_code={event.get('exit_code')}",
+                flush=True,
+            )
+            return
+
+        if kind == "escalation_stop":
+            print(
+                f"[soak-run] escalation_stop cycle={event.get('cycle')} reason={event.get('reason')}",
+                flush=True,
+            )
+            print(
+                "[soak-run][guide] Escalation hard-stop triggered; inspect runner log and latest snapshot pack.",
+                flush=True,
+            )
+            return
+
+        if kind == "dry_run_plan":
+            phases = event.get("phase_plan", [])
+            phase_text = " -> ".join(str(value) for value in phases) if isinstance(phases, list) else ""
+            print(f"[soak-run] dry_run_plan phases={phase_text}", flush=True)
+            return
+
+        if kind == "control_event":
+            action = str(event.get("action", "")).strip()
+            status = str(event.get("status", "")).strip()
+            service = event.get("service")
+            svc = f" service={service}" if service else ""
+            print(
+                f"[soak-run] control decision={event.get('decision')} action={action or None} status={status}{svc}",
+                flush=True,
+            )
+            guidance = ""
+            if action == "status_check" and status == "executed_ok":
+                guidance = "Status check passed; continue observing service health."
+            elif action == "status_check" and status in {"executed_fail", "missing_script"}:
+                guidance = "Status check failed; inspect runner log and check_wicap_status output."
+            elif action == "compose_up" and status == "executed_ok":
+                guidance = "Compose recovery succeeded; verify services stay up in next cycles."
+            elif action == "compose_up" and status == "executed_fail":
+                guidance = "Compose recovery failed; inspect docker compose logs."
+            elif action.startswith("restart_service:") and status == "executed_ok":
+                guidance = "Service restart succeeded; verify service health in next cycles."
+            elif action.startswith("restart_service:") and status == "executed_fail":
+                guidance = "Service restart failed; inspect docker compose logs."
+            elif action == "rollback_sequence" and status == "executed_ok":
+                guidance = "Rollback sequence completed; verify services stabilize in subsequent cycles."
+            elif action == "rollback_sequence" and status in {"executed_fail", "escalated"}:
+                guidance = "Rollback sequence failed; manual operator intervention required."
+            elif status == "down_detected":
+                guidance = "Service degradation detected; waiting control thresholds for action."
+            elif status == "stable":
+                guidance = "Services stable; continue monitoring."
+            elif status == "escalated":
+                guidance = "Service recovery escalated; immediate operator intervention required."
+            elif status == "cooldown":
+                guidance = "Control policy cooldown active; re-evaluating next cycle."
+            elif status == "skipped_observe_mode":
+                guidance = "Observe mode skipped recovery action; use --control-mode assist/autonomous to execute it."
+            if guidance:
+                print(f"[soak-run][guide] {guidance}", flush=True)
+            return
+
+    conn = connect_db(db_path)
+    try:
+        summary = run_supervised_soak(
+            conn,
+            duration_minutes=duration_minutes,
+            playwright_interval_minutes=playwright_interval_minutes,
+            baseline_path=baseline_path,
+            baseline_update=baseline_update,
+            dry_run=dry_run,
+            managed_observe=True,
+            observe_interval_seconds=observe_interval_seconds,
+            control_mode=normalized_control_mode,
+            control_check_threshold=control_check_threshold,
+            control_recover_threshold=control_recover_threshold,
+            control_max_recover_attempts=control_max_recover_attempts,
+            control_action_cooldown_cycles=control_action_cooldown_cycles,
+            stop_on_escalation=bool(stop_on_escalation),
+            progress_hook=_progress,
+        )
+        if not dry_run:
+            conn.commit()
+    finally:
+        conn.close()
+
+    if dry_run:
+        print("Soak run dry-run")
+        print(f"runner_path={summary['runner_path']}")
+        if summary.get("learned_profile"):
+            learned = summary["learned_profile"]
+            print(
+                "learned_profile="
+                f"score={learned.get('score')} "
+                f"evidence_count={learned.get('evidence_count')} "
+                f"success_count={learned.get('success_count')} "
+                f"fail_count={learned.get('fail_count')}"
+            )
+        print(f"command={' '.join(summary['command'])}")
+        print(f"timeout_seconds={summary['timeout_seconds']}")
+        print(f"managed_observe={summary.get('managed_observe')}")
+        print(f"observe_interval_seconds={summary.get('observe_interval_seconds')}")
+        print(f"control_mode={summary.get('control_mode')}")
+        print(f"control_policy_profile={summary.get('control_policy_profile')}")
+        print(f"control_kill_switch_env_var={summary.get('control_kill_switch_env_var')}")
+        print(f"control_kill_switch_file={summary.get('control_kill_switch_file')}")
+        print(f"control_rollback_enabled={summary.get('control_rollback_enabled')}")
+        print(f"stop_on_escalation={summary.get('stop_on_escalation')}")
+        print(f"post_run_cleanup={summary.get('post_run_cleanup')}")
+        phase_plan = summary.get("phase_plan", [])
+        if isinstance(phase_plan, list) and phase_plan:
+            print("phase_plan=" + " -> ".join(str(value) for value in phase_plan))
+        learning = summary.get("learning_readiness", {})
+        if isinstance(learning, dict) and learning:
+            print(
+                "learning_readiness="
+                f"status={learning.get('status')} "
+                f"score={learning.get('score')}/{learning.get('max_score')} "
+                f"profile_success_count={learning.get('profile_success_count')} "
+                f"runbook_steps_count={learning.get('runbook_steps_count')}"
+            )
+        print(
+            "effective_args="
+            f"duration_minutes={summary.get('effective_duration_minutes')} "
+            f"playwright_interval_minutes={summary.get('effective_playwright_interval_minutes')}"
+        )
+        runbook = summary.get("learned_runbook", {})
+        if isinstance(runbook, dict):
+            print(
+                "learned_runbook="
+                f"success_session_count={runbook.get('success_session_count', 0)} "
+                f"steps={len(runbook.get('steps', [])) if isinstance(runbook.get('steps'), list) else 0}"
+            )
+            steps = runbook.get("steps", [])
+            if isinstance(steps, list):
+                for step in steps[:5]:
+                    print(f"runbook_step={step}")
+        actions = summary.get("manager_actions", [])
+        if isinstance(actions, list):
+            for action in actions[:8]:
+                print(f"manager_action={action}")
+        guidance = summary.get("operator_guidance", [])
+        if isinstance(guidance, list):
+            for line in guidance[:8]:
+                print(f"operator_guidance={line}")
+        print(f"snapshot_count={summary.get('snapshot_count')}")
+        print(f"snapshot_dir={summary.get('snapshot_dir')}")
+        print(f"run_dir={summary['run_dir']}")
+        print(f"runner_log={summary['runner_log']}")
+        print("post_steps=ingest --scan-soaks, incident <newest logs_soak_*> --overwrite")
+        print(f"newest_soak_dir_now={summary['newest_soak_dir']}")
+        return 0
+
+    print(
+        "Soak run complete: "
+        f"run_id={summary['run_id']} "
+        f"control_session_id={summary.get('control_session_id')} "
+        f"exit_code={summary['exit_code']} "
+        f"newest_soak_dir={summary['newest_soak_dir']} "
+        f"incident_path={summary['incident_path']}"
+    )
+    print(
+        "Soak run live metrics: "
+        f"observation_cycles={summary.get('observation_cycles')} "
+        f"alert_cycles={summary.get('alert_cycles')} "
+        f"down_service_cycles={summary.get('down_service_cycles')} "
+        f"control_policy_profile={summary.get('control_policy_profile')} "
+        f"control_actions_executed={summary.get('control_actions_executed')} "
+        f"control_escalations={summary.get('control_escalations')} "
+        f"snapshot_count={summary.get('snapshot_count')} "
+        f"escalation_hard_stop={summary.get('escalation_hard_stop')} "
+        f"cleanup_status={summary.get('cleanup_status')}"
+    )
+    if summary.get("escalation_reason"):
+        print(f"Soak run escalation reason: {summary.get('escalation_reason')}")
+    if summary.get("snapshot_dir"):
+        print(f"Soak run snapshot dir: {summary.get('snapshot_dir')}")
+    learning = summary.get("learning_readiness", {})
+    if isinstance(learning, dict) and learning:
+        print(
+            "Soak run learning readiness: "
+            f"status={learning.get('status')} "
+            f"score={learning.get('score')}/{learning.get('max_score')} "
+            f"startup_step={learning.get('has_startup_step')} "
+            f"verify_step={learning.get('has_verify_step')}"
+        )
+    phase_trace = summary.get("phase_trace", [])
+    if isinstance(phase_trace, list) and phase_trace:
+        compact = ", ".join(
+            f"{item.get('phase')}:{item.get('status')}"
+            for item in phase_trace
+            if isinstance(item, dict)
+        )
+        print(f"Soak run phases: {compact}")
+    runbook = summary.get("learned_runbook", {})
+    if isinstance(runbook, dict):
+        print(
+            "Soak run learned runbook: "
+            f"success_session_count={runbook.get('success_session_count', 0)} "
+            f"steps={len(runbook.get('steps', [])) if isinstance(runbook.get('steps'), list) else 0}"
+        )
+    actions = summary.get("manager_actions", [])
+    if isinstance(actions, list) and actions:
+        print("Soak run manager actions:")
+        for action in actions[:8]:
+            print(f"- {action}")
+    guidance = summary.get("operator_guidance", [])
+    if isinstance(guidance, list) and guidance:
+        print("Soak run operator guidance:")
+        for line in guidance[:8]:
+            print(f"- {line}")
+    return 0
+
+
+def _run_agent(
+    db_path: Path,
+    *,
+    control_mode: str,
+    observe_interval_seconds: float,
+) -> int:
+    normalized_control_mode = _normalize_control_mode(control_mode)
+    conn = connect_db(db_path)
+    try:
+        return run_agent_console(
+            conn,
+            default_control_mode=str(normalized_control_mode),
+            default_observe_interval_seconds=float(observe_interval_seconds),
+        )
+    finally:
+        conn.close()
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build CLI parser."""
     parser = argparse.ArgumentParser(prog="wicap-assist")
@@ -339,6 +674,32 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser("changelog-stats", help="Print deterministic changelog ingest statistics")
 
+    contract_parser = subparsers.add_parser(
+        "contract-check",
+        help="Validate live WICAP runtime against versioned runtime contract",
+    )
+    contract_parser.add_argument(
+        "--contract-path",
+        type=Path,
+        default=None,
+        help="Override runtime contract JSON path (default: <WICAP_REPO_ROOT>/ops/runtime-contract.v1.json)",
+    )
+    contract_parser.add_argument("--json", action="store_true", dest="as_json", help="Emit JSON output")
+    contract_gate_group = contract_parser.add_mutually_exclusive_group()
+    contract_gate_group.add_argument(
+        "--enforce",
+        dest="enforce",
+        action="store_true",
+        help="Exit non-zero when contract check does not pass",
+    )
+    contract_gate_group.add_argument(
+        "--no-enforce",
+        dest="enforce",
+        action="store_false",
+        help="Always exit zero (informational mode)",
+    )
+    contract_parser.set_defaults(enforce=True)
+
     cross_parser = subparsers.add_parser("cross-patterns", help="Detect chronic recurring failure patterns")
     cross_parser.add_argument("--min-occurrences", type=int, default=3, help="Minimum source count")
     cross_parser.add_argument("--min-span-days", type=float, default=7.0, help="Minimum time span in days")
@@ -355,6 +716,154 @@ def build_parser() -> argparse.ArgumentParser:
     audit_parser = subparsers.add_parser("confidence-audit", help="Audit confidence score distribution")
     audit_parser.add_argument("--limit", type=int, default=100, help="Number of patterns to analyze")
     audit_parser.add_argument("--json", action="store_true", dest="as_json", help="Emit JSON output")
+
+    soak_run_parser = subparsers.add_parser("soak-run", help="Run supervised WICAP soak and auto-capture context")
+    soak_run_parser.add_argument("--duration-minutes", type=int, default=None, help="Soak duration in minutes")
+    soak_run_parser.add_argument(
+        "--playwright-interval-minutes",
+        type=int,
+        default=None,
+        help="Playwright check interval in minutes",
+    )
+    soak_run_parser.add_argument("--baseline-path", type=Path, default=None, help="Optional baseline JSON path")
+    baseline_update_group = soak_run_parser.add_mutually_exclusive_group()
+    baseline_update_group.add_argument(
+        "--baseline-update",
+        dest="baseline_update",
+        action="store_true",
+        help="Update baseline JSON from run",
+    )
+    baseline_update_group.add_argument(
+        "--no-baseline-update",
+        dest="baseline_update",
+        action="store_false",
+        help="Do not update baseline JSON from run",
+    )
+    soak_run_parser.set_defaults(baseline_update=None)
+    soak_run_parser.add_argument("--dry-run", action="store_true", help="Print plan without executing soak")
+    soak_run_parser.add_argument(
+        "--observe-interval-seconds",
+        type=float,
+        default=10.0,
+        help="Live observation interval during supervised soak",
+    )
+    soak_run_parser.add_argument(
+        "--control-mode",
+        choices=("monitor", "observe", "assist", "autonomous"),
+        default="observe",
+        help="Control policy mode: monitor/observe, assist, or autonomous (with rollback + kill-switch checks)",
+    )
+    soak_run_parser.add_argument(
+        "--control-check-threshold",
+        type=int,
+        default=None,
+        help="Cycles down before status check action (profile default when omitted)",
+    )
+    soak_run_parser.add_argument(
+        "--control-recover-threshold",
+        type=int,
+        default=None,
+        help="Cycles down before compose recovery action",
+    )
+    soak_run_parser.add_argument(
+        "--control-max-recover-attempts",
+        type=int,
+        default=None,
+        help="Maximum compose recovery attempts per service",
+    )
+    soak_run_parser.add_argument(
+        "--control-action-cooldown-cycles",
+        type=int,
+        default=None,
+        help="Cooldown cycles between control actions",
+    )
+    soak_stop_group = soak_run_parser.add_mutually_exclusive_group()
+    soak_stop_group.add_argument(
+        "--stop-on-escalation",
+        dest="stop_on_escalation",
+        action="store_true",
+        help="Stop soak run when control policy escalates",
+    )
+    soak_stop_group.add_argument(
+        "--no-stop-on-escalation",
+        dest="stop_on_escalation",
+        action="store_false",
+        help="Keep soak runner active even if control policy escalates",
+    )
+    soak_run_parser.set_defaults(stop_on_escalation=True)
+    soak_contract_group = soak_run_parser.add_mutually_exclusive_group()
+    soak_contract_group.add_argument(
+        "--require-runtime-contract",
+        dest="require_runtime_contract",
+        action="store_true",
+        help="Fail fast when runtime contract check does not pass before starting soak",
+    )
+    soak_contract_group.add_argument(
+        "--no-require-runtime-contract",
+        dest="require_runtime_contract",
+        action="store_false",
+        help="Do not gate soak launch on runtime contract check",
+    )
+    soak_run_parser.set_defaults(require_runtime_contract=True)
+    soak_run_parser.add_argument(
+        "--runtime-contract-path",
+        type=Path,
+        default=None,
+        help="Override runtime contract JSON path for soak preflight gate",
+    )
+
+    live_parser = subparsers.add_parser("live", help="Live monitor loop with optional assist/autonomous control actions")
+    live_parser.add_argument("--interval", type=float, default=10.0, help="Observation interval in seconds")
+    live_parser.add_argument("--once", action="store_true", help="Run one observation cycle and exit")
+    live_parser.add_argument(
+        "--control-mode",
+        choices=("monitor", "observe", "assist", "autonomous"),
+        default="observe",
+        help="Control policy mode for live loop: monitor/observe, assist, or autonomous",
+    )
+    live_parser.add_argument(
+        "--control-check-threshold",
+        type=int,
+        default=None,
+        help="Cycles down before status check action (profile default when omitted)",
+    )
+    live_parser.add_argument(
+        "--control-recover-threshold",
+        type=int,
+        default=None,
+        help="Cycles down before compose recovery action",
+    )
+    live_parser.add_argument(
+        "--control-max-recover-attempts",
+        type=int,
+        default=None,
+        help="Maximum compose recovery attempts per service",
+    )
+    live_parser.add_argument(
+        "--control-action-cooldown-cycles",
+        type=int,
+        default=None,
+        help="Cooldown cycles between control actions",
+    )
+    live_parser.add_argument(
+        "--stop-on-escalation",
+        action="store_true",
+        help="Exit with code 2 when control policy escalates",
+    )
+
+    agent_parser = subparsers.add_parser("agent", help="Interactive live control agent console")
+    agent_parser.add_argument(
+        "--control-mode",
+        choices=("monitor", "observe", "assist", "autonomous"),
+        default="observe",
+        help="Default control mode used for soak requests in the console (monitor aliases observe)",
+    )
+    agent_parser.add_argument(
+        "--observe-interval-seconds",
+        type=float,
+        default=10.0,
+        help="Default observation interval used for soak requests in the console",
+    )
 
     return parser
 
@@ -499,6 +1008,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "changelog-stats":
         return _run_changelog_stats(db_path)
 
+    if args.command == "contract-check":
+        return _run_contract_check(
+            contract_path=args.contract_path,
+            as_json=bool(args.as_json),
+            enforce=bool(args.enforce),
+        )
+
     if args.command == "cross-patterns":
         conn = connect_db(db_path)
         try:
@@ -547,6 +1063,85 @@ def main(argv: Sequence[str] | None = None) -> int:
         else:
             print(format_confidence_audit_text(report))
         return 0
+
+    if args.command == "soak-run":
+        return _run_soak_run(
+            db_path,
+            duration_minutes=max(1, int(args.duration_minutes)) if args.duration_minutes is not None else None,
+            playwright_interval_minutes=(
+                max(1, int(args.playwright_interval_minutes))
+                if args.playwright_interval_minutes is not None
+                else None
+            ),
+            baseline_path=args.baseline_path,
+            baseline_update=args.baseline_update,
+            dry_run=bool(args.dry_run),
+            observe_interval_seconds=max(0.1, float(args.observe_interval_seconds)),
+            control_mode=_normalize_control_mode(str(args.control_mode)),
+            control_check_threshold=(
+                max(1, int(args.control_check_threshold))
+                if args.control_check_threshold is not None
+                else None
+            ),
+            control_recover_threshold=(
+                max(1, int(args.control_recover_threshold))
+                if args.control_recover_threshold is not None
+                else None
+            ),
+            control_max_recover_attempts=(
+                max(1, int(args.control_max_recover_attempts))
+                if args.control_max_recover_attempts is not None
+                else None
+            ),
+            control_action_cooldown_cycles=(
+                max(0, int(args.control_action_cooldown_cycles))
+                if args.control_action_cooldown_cycles is not None
+                else None
+            ),
+            stop_on_escalation=bool(args.stop_on_escalation),
+            require_runtime_contract=bool(args.require_runtime_contract),
+            runtime_contract_path=args.runtime_contract_path,
+        )
+
+    if args.command == "live":
+        conn = connect_db(db_path)
+        try:
+            return run_live_monitor(
+                conn,
+                interval=max(0.1, float(args.interval)),
+                once=bool(args.once),
+                control_mode=_normalize_control_mode(str(args.control_mode)),
+                control_check_threshold=(
+                    max(1, int(args.control_check_threshold))
+                    if args.control_check_threshold is not None
+                    else None
+                ),
+                control_recover_threshold=(
+                    max(1, int(args.control_recover_threshold))
+                    if args.control_recover_threshold is not None
+                    else None
+                ),
+                control_max_recover_attempts=(
+                    max(1, int(args.control_max_recover_attempts))
+                    if args.control_max_recover_attempts is not None
+                    else None
+                ),
+                control_action_cooldown_cycles=(
+                    max(0, int(args.control_action_cooldown_cycles))
+                    if args.control_action_cooldown_cycles is not None
+                    else None
+                ),
+                stop_on_escalation=bool(args.stop_on_escalation),
+            )
+        finally:
+            conn.close()
+
+    if args.command == "agent":
+        return _run_agent(
+            db_path,
+            control_mode=_normalize_control_mode(str(args.control_mode)),
+            observe_interval_seconds=max(0.1, float(args.observe_interval_seconds)),
+        )
 
     parser.error("Unknown command")
     return 2

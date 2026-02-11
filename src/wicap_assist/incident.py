@@ -10,6 +10,7 @@ import sqlite3
 from typing import Any
 
 from wicap_assist.bundle import resolve_target_filter
+from wicap_assist.config import wicap_repo_root
 from wicap_assist.git_context import (
     build_git_context,
     load_antigravity_git_evidence,
@@ -20,9 +21,6 @@ from wicap_assist.harness_match import find_relevant_harness_scripts
 from wicap_assist.util.evidence import normalize_signature, parse_utc_datetime
 from wicap_assist.util.time import utc_now_iso
 
-WICAP_REPO_ROOT = Path("/home/steve/apps/wicap")
-INCIDENTS_DIR = WICAP_REPO_ROOT / "docs" / "incidents"
-INDEX_PATH = INCIDENTS_DIR / "INDEX.md"
 _CATEGORIES = ("error", "docker_fail", "pytest_fail")
 _SIGNAL_SECTIONS = (
     ("Commands", "commands"),
@@ -30,6 +28,16 @@ _SIGNAL_SECTIONS = (
     ("File Paths", "file_paths"),
     ("Outcomes", "outcomes"),
 )
+
+
+def default_incidents_dir(*, repo_root: Path | None = None) -> Path:
+    resolved_repo_root = repo_root or wicap_repo_root()
+    return resolved_repo_root / "docs" / "incidents"
+
+
+# Compatibility exports for existing imports; do not use as function defaults.
+INCIDENTS_DIR = default_incidents_dir()
+INDEX_PATH = INCIDENTS_DIR / "INDEX.md"
 
 
 def load_bundle_json(path: Path) -> dict[str, Any]:
@@ -41,8 +49,13 @@ def load_bundle_json(path: Path) -> dict[str, Any]:
     return payload
 
 
-def _resolve_incident_timestamp(conn: sqlite3.Connection, target: str) -> tuple[str, datetime]:
-    where_sql, params, _ = resolve_target_filter(target)
+def _resolve_incident_timestamp(
+    conn: sqlite3.Connection,
+    target: str,
+    *,
+    repo_root: Path | None = None,
+) -> tuple[str, datetime]:
+    where_sql, params, _ = resolve_target_filter(target, repo_root=repo_root)
     rows = conn.execute(
         f"""
         SELECT ts_text
@@ -378,17 +391,24 @@ def write_incident_report(
     *,
     target: str,
     bundle: dict[str, Any],
-    incidents_dir: Path = INCIDENTS_DIR,
+    incidents_dir: Path | None = None,
+    repo_root: Path | None = None,
     overwrite: bool = False,
 ) -> Path:
     """Write incident markdown and update index, returning report path."""
-    generated_ts, generated_dt = _resolve_incident_timestamp(conn, target)
+    resolved_repo_root = repo_root or wicap_repo_root()
+    resolved_incidents_dir = incidents_dir or default_incidents_dir(repo_root=resolved_repo_root)
+    generated_ts, generated_dt = _resolve_incident_timestamp(
+        conn,
+        target,
+        repo_root=resolved_repo_root,
+    )
     slug = _sanitize_target(target)
     date_part = generated_dt.strftime("%Y-%m-%d")
     filename = f"{date_part}-{slug}.md"
 
-    incidents_dir.mkdir(parents=True, exist_ok=True)
-    report_path = incidents_dir / filename
+    resolved_incidents_dir.mkdir(parents=True, exist_ok=True)
+    report_path = resolved_incidents_dir / filename
 
     if report_path.exists() and not overwrite:
         raise FileExistsError(f"Incident report already exists: {report_path}")
@@ -442,7 +462,7 @@ def write_incident_report(
     report_path.write_text(markdown, encoding="utf-8")
 
     _update_index(
-        incidents_dir / "INDEX.md",
+        resolved_incidents_dir / "INDEX.md",
         filename=filename,
         target=target,
         bundle=bundle,
