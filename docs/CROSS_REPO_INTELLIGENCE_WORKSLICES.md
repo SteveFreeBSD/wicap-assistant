@@ -6,8 +6,8 @@ Canonical chain: `ASSISTANT_MISSION.md` -> `ASSISTANT_ROADMAP.md` -> this file
 
 ## 0. Implementation Snapshot
 - Implemented M0 baseline artifacts in both repos:
-  - WiCAP: `ops/contracts/wicap.event.v1.json`, `ops/contracts/wicap.control.v1.json`, contract fixture exports, schema tests.
-  - Assistant: `ops/contracts/wicap.telemetry.v1.json`, WiCAP contract fixtures, parity tests.
+  - WiCAP: `ops/contracts/wicap.event.v1.json`, `ops/contracts/wicap.control.v1.json`, `ops/contracts/wicap.anomaly.v1.json`, `ops/contracts/wicap.feedback.v1.json`, contract fixture exports, schema tests.
+  - Assistant: `ops/contracts/wicap.telemetry.v1.json`, WiCAP contract fixtures (`event/control/anomaly/feedback`), parity tests.
 - Implemented M1 control-plane gates:
   - Assistant: deny-precedence runtime/tool/elevated plane checks in allowlisted actuators.
   - WiCAP: policy-gated `/api/system/control-intent` intake + plane audit records + status-script intent validator.

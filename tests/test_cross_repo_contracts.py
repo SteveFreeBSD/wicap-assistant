@@ -10,6 +10,12 @@ import pytest
 _ASSISTANT_ROOT = Path(__file__).resolve().parents[1]
 _ASSISTANT_CONTRACT_DIR = _ASSISTANT_ROOT / "ops" / "contracts"
 _ASSISTANT_FIXTURE_DIR = _ASSISTANT_ROOT / "tests" / "fixtures" / "wicap_contracts"
+_WICAP_CONTRACT_NAMES = (
+    "wicap.event.v1.json",
+    "wicap.control.v1.json",
+    "wicap.anomaly.v1.json",
+    "wicap.feedback.v1.json",
+)
 
 
 def _read_json(path: Path) -> dict[str, object]:
@@ -51,6 +57,8 @@ def test_telemetry_contract_shape_is_provider_neutral_otlp() -> None:
 def test_assistant_wicap_contract_fixtures_are_present_and_versioned() -> None:
     event_contract = _read_json(_ASSISTANT_FIXTURE_DIR / "wicap.event.v1.json")
     control_contract = _read_json(_ASSISTANT_FIXTURE_DIR / "wicap.control.v1.json")
+    anomaly_contract = _read_json(_ASSISTANT_FIXTURE_DIR / "wicap.anomaly.v1.json")
+    feedback_contract = _read_json(_ASSISTANT_FIXTURE_DIR / "wicap.feedback.v1.json")
 
     assert event_contract.get("schema") == "wicap.event.v1"
     assert event_contract.get("event_contract_version") == "wicap.event.v1"
@@ -58,19 +66,26 @@ def test_assistant_wicap_contract_fixtures_are_present_and_versioned() -> None:
     assert control_contract.get("schema") == "wicap.control.v1"
     assert control_contract.get("control_intent_version") == "wicap.control.v1"
 
+    assert anomaly_contract.get("schema") == "wicap.anomaly.v1"
+    assert anomaly_contract.get("anomaly_contract_version") == "wicap.anomaly.v1"
+
+    assert feedback_contract.get("schema") == "wicap.feedback.v1"
+    assert feedback_contract.get("feedback_contract_version") == "wicap.feedback.v1"
+
+
+def test_assistant_wicap_fixture_inventory_matches_expected_contract_set() -> None:
+    fixtures = {path.name for path in _ASSISTANT_FIXTURE_DIR.glob("wicap.*.v1.json")}
+    assert fixtures == set(_WICAP_CONTRACT_NAMES)
+
 
 def test_assistant_contract_fixtures_match_wicap_repo_contracts_when_available() -> None:
     repo_root = _wicap_repo_root()
-    event_contract_path = repo_root / "ops" / "contracts" / "wicap.event.v1.json"
-    control_contract_path = repo_root / "ops" / "contracts" / "wicap.control.v1.json"
-
-    if not event_contract_path.exists() or not control_contract_path.exists():
+    contract_dir = repo_root / "ops" / "contracts"
+    contract_paths = [contract_dir / name for name in _WICAP_CONTRACT_NAMES]
+    if any(not path.exists() for path in contract_paths):
         pytest.skip("WiCAP cross-repo contract files are unavailable in this environment")
 
-    event_contract = _read_json(event_contract_path)
-    event_fixture = _read_json(_ASSISTANT_FIXTURE_DIR / "wicap.event.v1.json")
-    assert event_fixture == event_contract
-
-    control_contract = _read_json(control_contract_path)
-    control_fixture = _read_json(_ASSISTANT_FIXTURE_DIR / "wicap.control.v1.json")
-    assert control_fixture == control_contract
+    for name in _WICAP_CONTRACT_NAMES:
+        contract = _read_json(contract_dir / name)
+        fixture = _read_json(_ASSISTANT_FIXTURE_DIR / name)
+        assert fixture == contract
