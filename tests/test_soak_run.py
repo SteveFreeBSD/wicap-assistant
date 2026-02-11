@@ -523,6 +523,8 @@ def test_soak_run_managed_observe_collects_live_metrics(tmp_path: Path) -> None:
     assert "learning_readiness" in summary
     assert "manager_actions" in summary
     assert "operator_guidance" in summary
+    assert "working_memory" in summary
+    assert isinstance(summary["working_memory"], dict)
     assert any(item["phase"] == "observe" and item["status"] == "completed" for item in summary["phase_trace"])
     assert any(str(event.get("event")) == "runner_start" for event in progress_events)
     assert any(str(event.get("event")) == "observe_cycle" for event in progress_events)
@@ -554,6 +556,19 @@ def test_soak_run_managed_observe_collects_live_metrics(tmp_path: Path) -> None:
     detail_row = conn.execute("SELECT detail_json FROM control_events WHERE soak_run_id = ? LIMIT 1", (summary["run_id"],)).fetchone()
     assert detail_row is not None
     assert "episode_id" in detail_row["detail_json"]
+    assert "shadow_ranker" in detail_row["detail_json"]
+    feature_row = conn.execute(
+        "SELECT feature_json FROM decision_features WHERE soak_run_id = ? ORDER BY id DESC LIMIT 1",
+        (summary["run_id"],),
+    ).fetchone()
+    assert feature_row is not None
+    assert "shadow_ranker_top_action" in str(feature_row["feature_json"])
+    session_row = conn.execute(
+        "SELECT metadata_json FROM control_sessions WHERE id = ?",
+        (summary["control_session_id"],),
+    ).fetchone()
+    assert session_row is not None
+    assert "working_memory" in str(session_row["metadata_json"])
     preflight_rows = conn.execute(
         "SELECT count(*) FROM control_events WHERE soak_run_id = ? AND decision = 'preflight_startup'",
         (summary["run_id"],),

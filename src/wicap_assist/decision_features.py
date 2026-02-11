@@ -124,6 +124,22 @@ def build_decision_feature_vector(
     except (TypeError, ValueError):
         cycle = 0
 
+    shadow_ranker = detail.get("shadow_ranker")
+    shadow_top_action = None
+    shadow_top_score = 0.0
+    shadow_candidate_count = 0
+    if isinstance(shadow_ranker, dict):
+        top_action_value = shadow_ranker.get("top_action")
+        if isinstance(top_action_value, str) and top_action_value.strip():
+            shadow_top_action = top_action_value.strip()
+        try:
+            shadow_top_score = float(shadow_ranker.get("top_score", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            shadow_top_score = 0.0
+        rankings = shadow_ranker.get("rankings")
+        if isinstance(rankings, list):
+            shadow_candidate_count = len(rankings)
+
     return {
         "mode": str(mode).strip(),
         "policy_profile": str(policy_profile).strip(),
@@ -143,5 +159,8 @@ def build_decision_feature_vector(
         "prior_action_fail": int(prior.get("prior_fail", 0) or 0),
         "prior_action_escalated": int(prior.get("prior_escalated", 0) or 0),
         "prior_action_success_rate": float(prior.get("prior_success_rate", 0.0) or 0.0),
+        "shadow_ranker_top_action": shadow_top_action,
+        "shadow_ranker_top_score": round(shadow_top_score, 4),
+        "shadow_ranker_candidate_count": int(shadow_candidate_count),
+        "shadow_ranker_agrees": bool(shadow_top_action and action and shadow_top_action == action),
     }
-

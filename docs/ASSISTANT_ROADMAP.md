@@ -60,13 +60,15 @@
 - Implemented episodic memory for action/outcome timelines (`episodes`, `episode_events`, `episode_outcomes`) with additive migration safety.
 - Implemented semantic retrieval over historical control episodes with top-k memory attachment in recommendation payloads.
 - Implemented additive decision feature store persistence (`decision_features`) for deterministic per-decision learning vectors.
-- Add working-memory context for active sessions and resumable handoffs.
-- Add adaptive action ranking (shadow-mode first, guarded promotion after quality gates).
+- Implemented working-memory context cache for active sessions and resumable live handoffs.
+- Implemented shadow-only action ranking baseline for allowlisted actions with auditable score traces.
+- Remaining: guarded promotion/ranking quality gates before any learned-action execution changes.
 
 ## Phase 11 – WiCAP-Native Network Intelligence (In Progress)
 - Implemented ingest adapter for WiCAP-native network envelopes and integrated network categories into recommendation/playbook/rollup/guardian evidence paths.
 - Implemented WiCAP-side event normalization + Zeek conn and Suricata EVE compatibility exporters for contract-aligned flow semantics.
 - Implemented ingestion support for `wicap.anomaly.v1` scored anomaly stream artifacts.
+- Implemented ingestion support for `wicap.feedback.v1` anomaly feedback artifacts.
 - Correlate anomaly classes to control ladders and verification playbooks.
 - Close false-positive loops with bounded operator feedback and deterministic recalibration.
 

@@ -23,6 +23,7 @@ from wicap_assist.db import (
     insert_live_observation,
     update_control_session,
 )
+from wicap_assist.action_ranker import rank_allowlisted_actions
 from wicap_assist.decision_features import build_decision_feature_vector, query_prior_action_stats
 from wicap_assist.guardian import (
     GuardianState,
@@ -39,6 +40,11 @@ from wicap_assist.soak_manager import build_operator_guidance
 from wicap_assist.telemetry import emit_control_cycle_telemetry
 from wicap_assist.util.evidence import normalize_signature
 from wicap_assist.util.redact import to_snippet
+from wicap_assist.working_memory import (
+    parse_working_memory,
+    summarize_working_memory,
+    update_working_memory,
+)
 
 _ERROR_LINE_RE = re.compile(
     r"(?:traceback|exception|error:|failed to|permission denied|econnrefused|etimedout|eacces|enoent|fatal|panic|critical)",
@@ -88,6 +94,10 @@ def _metadata_repo_root(raw_meta: object) -> str | None:
     if not isinstance(value, str):
         return None
     return value.strip() or None
+
+
+def _metadata_working_memory(raw_meta: object) -> dict[str, Any]:
+    return parse_working_memory(raw_meta)
 
 
 def _infer_category(line: str) -> str:
@@ -479,6 +489,13 @@ def run_live_monitor(
 
     interrupted_sessions = stale_closed
     resumed = candidate_session_id is not None
+    working_memory_state: dict[str, Any] = {
+        "unresolved_signatures": [],
+        "pending_actions": [],
+        "recent_transitions": [],
+        "down_services": [],
+        "last_observation_ts": None,
+    }
     if resumed:
         interrupted_sessions += close_running_control_sessions(
             conn,
@@ -487,6 +504,13 @@ def run_live_monitor(
             exclude_session_id=int(candidate_session_id),
         )
         control_session_id = int(candidate_session_id)
+        resume_row = conn.execute(
+            "SELECT metadata_json FROM control_sessions WHERE id = ?",
+            (int(control_session_id),),
+        ).fetchone()
+        if resume_row is not None:
+            working_memory_state = _metadata_working_memory(resume_row["metadata_json"])
+        working_summary = summarize_working_memory(working_memory_state)
         update_control_session(
             conn,
             control_session_id=int(control_session_id),
@@ -511,6 +535,7 @@ def run_live_monitor(
                 "repo_root": str(active_repo_root),
                 "resume_window_seconds": int(max_resume_age),
                 "interrupted_sessions_closed": int(interrupted_sessions),
+                "working_memory": working_memory_state,
             },
         )
         insert_control_session_event(
@@ -522,6 +547,7 @@ def run_live_monitor(
             detail_json={
                 "mode": str(control_mode),
                 "profile": resolved_profile_name,
+                "working_memory": working_summary,
             },
         )
     else:
@@ -556,6 +582,7 @@ def run_live_monitor(
                 "repo_root": str(active_repo_root),
                 "resume_window_seconds": int(max_resume_age),
                 "interrupted_sessions_closed": int(interrupted_sessions),
+                "working_memory": working_memory_state,
             },
         )
         insert_control_session_event(
@@ -588,6 +615,13 @@ def run_live_monitor(
                 start_at_end_for_new=not bool(once),
             )
             cycle_control_events = policy.process_observation(observation)
+            shadow_ranker = rank_allowlisted_actions(
+                conn,
+                observation=observation,
+                mode=str(control_mode),
+                policy_profile=resolved_profile_name,
+                top_n=3,
+            )
             cycle_actions_executed = 0
             for event in cycle_control_events:
                 total_control_events += 1
@@ -602,6 +636,9 @@ def run_live_monitor(
                 detail_payload = event.get("detail_json", {})
                 if not isinstance(detail_payload, dict):
                     detail_payload = {}
+                detail_payload = dict(detail_payload)
+                detail_payload["shadow_ranker"] = shadow_ranker
+                event["detail_json"] = detail_payload
                 episode_id = insert_control_episode(
                     conn,
                     control_session_id=int(control_session_id),
@@ -661,6 +698,13 @@ def run_live_monitor(
                     detail_json=detail_payload,
                 )
 
+            working_memory_state = update_working_memory(
+                working_memory_state,
+                observation=observation,
+                cycle_control_events=cycle_control_events,
+            )
+            working_summary = summarize_working_memory(working_memory_state)
+
             total_observations += 1
             anomaly_events = 0
             top_signatures = observation.get("top_signatures", [])
@@ -711,11 +755,18 @@ def run_live_monitor(
                 metadata_json={
                     "observations": int(total_observations),
                     "control_events": int(total_control_events),
+                    "working_memory": working_memory_state,
                 },
             )
             conn.commit()
 
             print(format_live_panel(observation))
+            print(
+                "working_memory: "
+                f"unresolved={working_summary['unresolved_count']} "
+                f"pending={working_summary['pending_count']} "
+                f"transitions={working_summary['transition_count']}"
+            )
             if alerts:
                 print(f"guardian_alerts={len(alerts)}")
                 for alert in alerts[:2]:
@@ -760,6 +811,7 @@ def run_live_monitor(
                 "control_events": int(total_control_events),
                 "escalated": bool(escalated),
                 "return_code": int(return_code),
+                "working_memory": working_memory_state,
                 "control_policy_profile": resolved_profile_name,
                 "control_kill_switch_env_var": resolved_kill_switch_env or None,
                 "control_kill_switch_file": resolved_kill_switch_file,

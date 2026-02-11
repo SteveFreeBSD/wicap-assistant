@@ -13,6 +13,7 @@ import time
 from typing import Any, Callable
 
 from wicap_assist.actuators import run_allowlisted_action
+from wicap_assist.action_ranker import rank_allowlisted_actions
 from wicap_assist.bundle import build_bundle
 from wicap_assist.config import wicap_repo_root
 from wicap_assist.db import (
@@ -42,6 +43,7 @@ from wicap_assist.soak_manager import (
 from wicap_assist.soak_profiles import learn_soak_runbook, select_learned_soak_profile
 from wicap_assist.telemetry import emit_control_cycle_telemetry
 from wicap_assist.util.time import utc_now_iso
+from wicap_assist.working_memory import summarize_working_memory, update_working_memory
 
 SOAK_RUNS_ROOT = Path("data/soak_runs")
 
@@ -288,6 +290,13 @@ def run_supervised_soak(
     control_session_id: int | None = None
     control_actions_executed = 0
     control_escalations = 0
+    working_memory_state: dict[str, Any] = {
+        "unresolved_signatures": [],
+        "pending_actions": [],
+        "recent_transitions": [],
+        "down_services": [],
+        "last_observation_ts": None,
+    }
 
     control_policy = ControlPolicy(
         mode=str(control_mode),
@@ -454,6 +463,7 @@ def run_supervised_soak(
                 "success_session_count": learned_runbook.success_session_count,
                 "session_ids": learned_runbook.session_ids,
             },
+            "working_memory": working_memory_state,
         }
 
     before_dirs = {str(path.resolve()) for path in _scan_soak_dirs(resolved_repo_root)}
@@ -490,6 +500,7 @@ def run_supervised_soak(
             "stop_on_escalation": bool(stop_on_escalation),
             "post_run_cleanup": bool(post_run_cleanup),
             "interrupted_sessions_closed": int(interrupted_sessions),
+            "working_memory": working_memory_state,
         },
     )
     insert_control_session_event(
@@ -663,6 +674,13 @@ def run_supervised_soak(
                     )
 
                     cycle_control_events = control_policy.process_observation(observation)
+                    shadow_ranker = rank_allowlisted_actions(
+                        conn,
+                        observation=observation,
+                        mode=str(control_mode),
+                        policy_profile=resolved_profile_name,
+                        top_n=3,
+                    )
                     cycle_actions_executed = 0
                     for event in cycle_control_events:
                         if isinstance(event, dict):
@@ -690,6 +708,12 @@ def run_supervised_soak(
                         if status == "escalated":
                             control_escalations += 1
                         detail = event.get("detail_json", {})
+                        if isinstance(detail, dict):
+                            detail = dict(detail)
+                        else:
+                            detail = {}
+                        detail["shadow_ranker"] = shadow_ranker
+                        event["detail_json"] = detail
                         service = detail.get("service") if isinstance(detail, dict) else None
                         emit_progress(
                             {
@@ -712,6 +736,25 @@ def run_supervised_soak(
                         snapshot_paths.append(str(snapshot_path))
 
                     anomaly_events = 0
+                    working_memory_state = update_working_memory(
+                        working_memory_state,
+                        observation=observation,
+                        cycle_control_events=cycle_control_events,
+                    )
+                    working_summary = summarize_working_memory(working_memory_state)
+                    if control_session_id is not None:
+                        update_control_session(
+                            conn,
+                            control_session_id=int(control_session_id),
+                            metadata_json={"working_memory": working_memory_state},
+                        )
+                    emit_progress(
+                        {
+                            "event": "working_memory",
+                            "cycle": int(observation_cycles),
+                            **working_summary,
+                        }
+                    )
                     if isinstance(top_signatures, list):
                         for item in top_signatures:
                             if not isinstance(item, dict):
@@ -776,7 +819,10 @@ def run_supervised_soak(
                                     current_phase="observe",
                                     handoff_state="escalated",
                                     last_heartbeat_ts=utc_now_iso(),
-                                    metadata_json={"escalation_reason": escalation_reason},
+                                    metadata_json={
+                                        "escalation_reason": escalation_reason,
+                                        "working_memory": working_memory_state,
+                                    },
                                 )
                                 insert_control_session_event(
                                     conn,
@@ -845,6 +891,13 @@ def run_supervised_soak(
                 }
             )
             cycle_control_events = control_policy.process_observation(observation)
+            shadow_ranker = rank_allowlisted_actions(
+                conn,
+                observation=observation,
+                mode=str(control_mode),
+                policy_profile=resolved_profile_name,
+                top_n=3,
+            )
             cycle_actions_executed = 0
             for event in cycle_control_events:
                 if isinstance(event, dict):
@@ -872,6 +925,12 @@ def run_supervised_soak(
                 if status == "escalated":
                     control_escalations += 1
                 detail = event.get("detail_json", {})
+                if isinstance(detail, dict):
+                    detail = dict(detail)
+                else:
+                    detail = {}
+                detail["shadow_ranker"] = shadow_ranker
+                event["detail_json"] = detail
                 service = detail.get("service") if isinstance(detail, dict) else None
                 emit_progress(
                     {
@@ -894,6 +953,17 @@ def run_supervised_soak(
                 snapshot_paths.append(str(snapshot_path))
 
             anomaly_events = 0
+            working_memory_state = update_working_memory(
+                working_memory_state,
+                observation=observation,
+                cycle_control_events=cycle_control_events,
+            )
+            if control_session_id is not None:
+                update_control_session(
+                    conn,
+                    control_session_id=int(control_session_id),
+                    metadata_json={"working_memory": working_memory_state},
+                )
             if isinstance(top_signatures, list):
                 for item in top_signatures:
                     if not isinstance(item, dict):
@@ -1074,6 +1144,7 @@ def run_supervised_soak(
             "learning_readiness": learning_readiness,
             "manager_actions": manager_actions_for_store,
             "operator_guidance": operator_guidance_for_store,
+            "working_memory": working_memory_state,
         },
         run_dir=str(run_dir),
         newest_soak_dir=str(newest) if newest is not None else None,
@@ -1164,6 +1235,7 @@ def run_supervised_soak(
                 "control_rollback_enabled": bool(control_policy.rollback_enabled),
                 "control_rollback_actions": resolved_rollback_actions,
                 "control_rollback_max_attempts": int(control_policy.rollback_max_attempts or 1),
+                "working_memory": working_memory_state,
             },
         )
         insert_control_session_event(
@@ -1212,6 +1284,7 @@ def run_supervised_soak(
             "escalation_reason": escalation_reason,
             "snapshot_count": len(snapshot_paths),
             "cleanup_status": cleanup_status,
+            "working_memory": summarize_working_memory(working_memory_state),
         }
     )
 
@@ -1269,6 +1342,7 @@ def run_supervised_soak(
         "learning_readiness": learning_readiness,
         "manager_actions": manager_actions,
         "operator_guidance": operator_guidance,
+        "working_memory": working_memory_state,
         "observation_cycles": int(observation_cycles),
         "alert_cycles": int(alert_cycles),
         "down_service_cycles": int(down_service_cycles),

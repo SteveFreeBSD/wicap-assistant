@@ -15,6 +15,7 @@ from wicap_assist.util.evidence import normalize_signature
 NETWORK_EVENT_PATTERNS = (
     "captures/wicap_network_events.jsonl",
     "captures/wicap_anomaly_events.jsonl",
+    "captures/wicap_anomaly_feedback.jsonl",
     "captures/suricata_eve_compat.jsonl",
     "captures/zeek_conn_compat.jsonl",
 )
@@ -58,15 +59,18 @@ def _parse_one_record(payload: dict[str, Any], *, file_path: Path, line_number: 
     elif isinstance(payload.get("timestamp"), str):
         ts_text = str(payload.get("timestamp"))
 
+    feedback_version = str(payload.get("feedback_contract_version", "")).strip().lower()
     category = str(payload.get("category") or payload.get("event_type") or "network_event").strip().lower()
     if not category:
         category = "network_event"
-    if "anomaly" in category or category in {"alert", "wids_alert"}:
+    if feedback_version == "wicap.feedback.v1":
+        category = "network_anomaly_feedback"
+    elif "anomaly" in category or category in {"alert", "wids_alert"}:
         category = "network_anomaly"
     elif category in {"flow", "conn"}:
         category = "network_flow"
 
-    signature = str(payload.get("signature") or payload.get("event_type") or category).strip()
+    signature = str(payload.get("signature") or payload.get("alert_id") or payload.get("event_type") or category).strip()
     normalized_signature = normalize_signature(signature) or sha1_text(signature)[:16]
     snippet = to_snippet(signature or category, max_len=200)
     fingerprint = sha1_text(f"{category}|{normalized_signature}|{snippet}")
@@ -88,6 +92,14 @@ def _parse_one_record(payload: dict[str, Any], *, file_path: Path, line_number: 
         extra_json["explanation"] = payload.get("explanation")
     if "sensor_id" in payload:
         extra_json["sensor_id"] = payload.get("sensor_id")
+    if "feedback_contract_version" in payload:
+        extra_json["feedback_contract_version"] = payload.get("feedback_contract_version")
+    if "label" in payload:
+        extra_json["feedback_label"] = payload.get("label")
+    if "attack_type" in payload:
+        extra_json["attack_type"] = payload.get("attack_type")
+    if "attack_id" in payload:
+        extra_json["attack_id"] = payload.get("attack_id")
     if isinstance(payload.get("evidence_ref"), dict):
         extra_json["evidence_ref"] = payload.get("evidence_ref")
 

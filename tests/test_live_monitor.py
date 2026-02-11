@@ -346,6 +346,22 @@ def test_live_assist_mode_records_control_events(tmp_path: Path, monkeypatch) ->
     assert detail_row is not None
     detail_payload = json.loads(str(detail_row["detail_json"]))
     assert "episode_id" in detail_payload
+    assert "shadow_ranker" in detail_payload
+    assert isinstance(detail_payload.get("shadow_ranker"), dict)
+    feature_row = conn.execute(
+        "SELECT feature_json FROM decision_features ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    assert feature_row is not None
+    feature_payload = json.loads(str(feature_row["feature_json"]))
+    assert "shadow_ranker_top_action" in feature_payload
+    assert "shadow_ranker_agrees" in feature_payload
+    metadata_row = conn.execute(
+        "SELECT metadata_json FROM control_sessions ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    assert metadata_row is not None
+    metadata_payload = json.loads(str(metadata_row["metadata_json"]))
+    assert "working_memory" in metadata_payload
+    assert isinstance(metadata_payload["working_memory"], dict)
 
     conn.close()
 

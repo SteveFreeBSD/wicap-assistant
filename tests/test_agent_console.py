@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from wicap_assist.agent_console import parse_agent_prompt, run_agent_console
-from wicap_assist.db import connect_db
+from wicap_assist.db import connect_db, insert_control_session
 
 
 def test_parse_agent_prompt_soak_assist_dry_run() -> None:
@@ -98,4 +98,57 @@ def test_run_agent_console_routes_core_intents(tmp_path: Path) -> None:
     assert any("guide: Dry-run only guidance." in line for line in outputs)
     assert any("agent: exit" in line for line in outputs)
 
+    conn.close()
+
+
+def test_run_agent_console_recommend_uses_working_memory_target(tmp_path: Path) -> None:
+    conn = connect_db(tmp_path / "assistant.db")
+    outputs: list[str] = []
+    prompts = iter(["recommend", "quit"])
+    recommend_calls: list[str] = []
+
+    insert_control_session(
+        conn,
+        soak_run_id=None,
+        started_ts="2026-02-12T00:00:00+00:00",
+        last_heartbeat_ts="2026-02-12T00:00:01+00:00",
+        mode="assist",
+        status="running",
+        current_phase="live_cycle",
+        handoff_state="active",
+        metadata_json={
+            "working_memory": {
+                "unresolved_signatures": ["error: redis timeout on reconnect"],
+                "pending_actions": ["restart_service:wicap-redis"],
+                "recent_transitions": [],
+                "down_services": ["wicap-redis"],
+                "last_observation_ts": "2026-02-12T00:00:01+00:00",
+            }
+        },
+    )
+    conn.commit()
+
+    def input_fn(_prompt: str) -> str:
+        return next(prompts)
+
+    def output_fn(line: str) -> None:
+        outputs.append(str(line))
+
+    def fake_recommend(_conn, target: str):  # type: ignore[no-untyped-def]
+        recommend_calls.append(target)
+        return {
+            "recommended_action": "Apply known fix",
+            "confidence": 0.8,
+            "verification_priority": ["python scripts/check_wicap_status.py --local-only"],
+        }
+
+    rc = run_agent_console(
+        conn,
+        input_fn=input_fn,
+        output_fn=output_fn,
+        recommend_fn=fake_recommend,
+    )
+    assert rc == 0
+    assert recommend_calls == ["error: redis timeout on reconnect"]
+    assert any("recommend: confidence=0.8" in line for line in outputs)
     conn.close()

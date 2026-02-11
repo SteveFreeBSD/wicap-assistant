@@ -74,6 +74,24 @@ def _write_anomaly_events(path: Path) -> None:
     path.write_text("\n".join(json.dumps(payload) for payload in payloads) + "\n", encoding="utf-8")
 
 
+def _write_feedback_events(path: Path) -> None:
+    payloads = [
+        {
+            "feedback_contract_version": "wicap.feedback.v1",
+            "ts": "2026-02-11T09:00:03Z",
+            "source": "api_alert_feedback",
+            "alert_id": "atk-42",
+            "label": "confirmed",
+            "attack_id": 42,
+            "attack_type": "anomaly_stream",
+            "bssid": "aa:bb:cc:dd:ee:ff",
+            "note": "verified",
+        }
+    ]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(json.dumps(payload) for payload in payloads) + "\n", encoding="utf-8")
+
+
 def test_scan_network_event_paths_finds_default_contract_stream(monkeypatch, tmp_path: Path) -> None:
     repo_root = tmp_path / "wicap"
     stream = repo_root / "captures" / "wicap_network_events.jsonl"
@@ -129,6 +147,31 @@ def test_ingest_network_events_reads_wicap_anomaly_contract_stream(monkeypatch, 
         extra = json.loads(str(row["extra_json"]))
         assert float(extra["score"]) == 82.4
         assert int(extra["confidence"]) == 78
+    finally:
+        conn.close()
+
+
+def test_ingest_network_events_reads_wicap_feedback_contract_stream(monkeypatch, tmp_path: Path) -> None:
+    repo_root = tmp_path / "wicap"
+    stream = repo_root / "captures" / "wicap_anomaly_feedback.jsonl"
+    _write_feedback_events(stream)
+    monkeypatch.setenv("WICAP_REPO_ROOT", str(repo_root))
+
+    conn = connect_db(tmp_path / "assistant.db")
+    try:
+        files_seen, events_added = ingest_network_events(conn)
+        conn.commit()
+        assert int(files_seen) == 1
+        assert int(events_added) == 1
+
+        row = conn.execute(
+            "SELECT category, snippet, extra_json FROM log_events ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        assert row is not None
+        assert str(row["category"]) == "network_anomaly_feedback"
+        extra = json.loads(str(row["extra_json"]))
+        assert str(extra["feedback_contract_version"]) == "wicap.feedback.v1"
+        assert str(extra["feedback_label"]) == "confirmed"
     finally:
         conn.close()
 

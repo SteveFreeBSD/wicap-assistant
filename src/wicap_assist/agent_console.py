@@ -22,6 +22,7 @@ from wicap_assist.live import collect_live_cycle, format_live_panel
 from wicap_assist.recommend import build_recommendation
 from wicap_assist.soak_run import run_supervised_soak
 from wicap_assist.util.time import utc_now_iso
+from wicap_assist.working_memory import parse_working_memory, summarize_working_memory
 
 _MINUTES_RE = re.compile(r"\b(\d+)\s*(?:minutes?|mins?|m)\b", re.IGNORECASE)
 _INTERVAL_RE = re.compile(
@@ -149,7 +150,7 @@ def _planned_next_action(observation: dict[str, Any]) -> str:
 def _latest_control_session_summary(conn: sqlite3.Connection) -> str:
     row = conn.execute(
         """
-        SELECT id, status, current_phase, started_ts, ended_ts
+        SELECT id, status, current_phase, started_ts, ended_ts, metadata_json
         FROM control_sessions
         ORDER BY id DESC
         LIMIT 1
@@ -157,11 +158,40 @@ def _latest_control_session_summary(conn: sqlite3.Connection) -> str:
     ).fetchone()
     if row is None:
         return "control_session: (none)"
-    return (
+    summary = (
         "control_session: "
         f"id={row['id']} status={row['status']} phase={row['current_phase']} "
         f"started={row['started_ts']} ended={row['ended_ts']}"
     )
+    memory = parse_working_memory(row["metadata_json"])
+    counts = summarize_working_memory(memory)
+    return (
+        f"{summary} "
+        f"working_memory(unresolved={counts['unresolved_count']} "
+        f"pending={counts['pending_count']} transitions={counts['transition_count']})"
+    )
+
+
+def _working_memory_target(conn: sqlite3.Connection) -> str | None:
+    row = conn.execute(
+        """
+        SELECT metadata_json
+        FROM control_sessions
+        ORDER BY id DESC
+        LIMIT 1
+        """
+    ).fetchone()
+    if row is None:
+        return None
+    memory = parse_working_memory(row["metadata_json"])
+    unresolved = memory.get("unresolved_signatures", [])
+    if not isinstance(unresolved, list):
+        return None
+    for item in unresolved:
+        value = str(item).strip()
+        if value:
+            return value
+    return None
 
 
 def run_agent_console(
@@ -284,7 +314,7 @@ def run_agent_console(
                 output_fn(line)
             continue
         if intent.kind == "recommend":
-            target = intent.target or newest_soak_target()
+            target = intent.target or _working_memory_target(conn) or newest_soak_target()
             if not target:
                 output_fn("agent: no target available. provide one explicitly.")
                 continue
