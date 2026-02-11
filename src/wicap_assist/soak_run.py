@@ -17,6 +17,7 @@ from wicap_assist.bundle import build_bundle
 from wicap_assist.config import wicap_repo_root
 from wicap_assist.db import (
     close_running_control_sessions,
+    insert_decision_feature,
     insert_control_episode,
     insert_control_event,
     insert_control_session,
@@ -25,6 +26,7 @@ from wicap_assist.db import (
     insert_soak_run,
     update_control_session,
 )
+from wicap_assist.decision_features import build_decision_feature_vector, query_prior_action_stats
 from wicap_assist.incident import write_incident_report
 from wicap_assist.ingest.soak_logs import ingest_soak_logs
 from wicap_assist.live import collect_live_cycle
@@ -1114,6 +1116,26 @@ def run_supervised_soak(
             status=status,
             episode_id=episode_id,
             detail_json=detail_payload,
+        )
+        prior_stats = query_prior_action_stats(conn, action)
+        feature_vector = build_decision_feature_vector(
+            event=event,
+            mode=str(control_mode),
+            policy_profile=resolved_profile_name,
+            prior_stats=prior_stats,
+        )
+        insert_decision_feature(
+            conn,
+            control_session_id=int(control_session_id) if control_session_id is not None else None,
+            soak_run_id=int(run_id),
+            episode_id=int(episode_id),
+            ts=ts,
+            mode=str(control_mode),
+            policy_profile=resolved_profile_name,
+            decision=decision,
+            action=action,
+            status=status,
+            feature_json=feature_vector,
         )
 
     if control_session_id is not None:

@@ -1,6 +1,6 @@
 # Cross-Repo Intelligent Agent Integration Plan
 
-Status: In Progress (M0-M3 foundations implemented; M5 baseline telemetry implemented)
+Status: In Progress (M0-M3 foundations implemented; M2.2 and M4.1 learning baselines implemented; M5 baseline telemetry implemented)
 Owners: WiCAP Core + wicap-assistant
 Canonical chain: `ASSISTANT_MISSION.md` -> `ASSISTANT_ROADMAP.md` -> this file
 
@@ -14,13 +14,22 @@ Canonical chain: `ASSISTANT_MISSION.md` -> `ASSISTANT_ROADMAP.md` -> this file
 - Implemented M2.1 episodic memory tier:
   - Assistant DB tables: `episodes`, `episode_events`, `episode_outcomes` with additive migration.
   - Live and soak control loops now write episode timelines per control action.
+- Implemented M2.2 semantic memory retrieval baseline:
+  - Assistant semantic episode retrieval module (`memory_semantic.py`) with deterministic top-k matching.
+  - Recommendation payloads now include `memory_episodes` and memory-backed action fallback when direct fix/playbook evidence is sparse.
 - Implemented M3 network semantics baseline:
   - WiCAP: `wicap.event.v1` normalization helpers + Zeek conn and Suricata EVE compatibility exports.
   - Assistant: network event ingest adapter (`--scan-network-events`) and routing into recommendation/playbook/rollup/guardian categories.
+- Implemented M4.1 decision feature store baseline:
+  - Assistant DB table: `decision_features` with additive migration and indexes.
+  - Live and soak control loops persist one deterministic feature vector per control decision.
+- Implemented WiCAP anomaly output contract baseline for M6/W3 bridge:
+  - WiCAP anomaly envelope contract `wicap.anomaly.v1` and runtime append path from stream scoring.
+  - Assistant ingest adapter now scans `captures/wicap_anomaly_events.jsonl`.
 - Implemented M5 baseline telemetry:
   - WiCAP optional OTLP collector profile (`profiles: [otel]`) with required processors.
   - Assistant OTLP-aligned telemetry envelopes with redaction hooks and tests.
-- Remaining: M2.2+ semantic memory/learning, M4 adaptive ranking gates, M5.3+ endpoint/auth/resilience hardening, M6/M7 rollout intelligence gates.
+- Remaining: M2.3+ memory tiers, M4.2+ adaptive ranking gates, M5.3+ endpoint/auth/resilience hardening, M6/M7 rollout intelligence gates.
 
 ## 1. Program Goal
 Build a WiCAP-native autonomous control agent with durable memory, adaptive learning, network anomaly intelligence, and secure cloud telemetry without breaking deterministic safety guarantees.
@@ -167,7 +176,7 @@ References are listed in Section 12.
 - Exit criteria:
   - each control action has an episode id and outcome row.
 
-### Work Slice M2.2 - Semantic Memory Retrieval Layer
+### Work Slice M2.2 - Semantic Memory Retrieval Layer (Implemented Baseline)
 - Goal: add retrieval over historical episodes/signatures for action ranking.
 - Assistant files:
   - `src/wicap_assist/memory_semantic.py` (new)
@@ -243,7 +252,7 @@ References are listed in Section 12.
 
 ## Milestone M4: Adaptive Learning for Autonomous Action Selection
 
-### Work Slice M4.1 - Feature Store for Decision Context
+### Work Slice M4.1 - Feature Store for Decision Context (Implemented Baseline)
 - Goal: persist per-decision features (state, anomaly vectors, prior outcomes).
 - Assistant files:
   - `src/wicap_assist/db.py` (feature tables)

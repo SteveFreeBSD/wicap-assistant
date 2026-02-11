@@ -530,6 +530,10 @@ def test_soak_run_managed_observe_collects_live_metrics(tmp_path: Path) -> None:
     assert any(str(event.get("event")) == "run_complete" for event in progress_events)
     control_rows = conn.execute("SELECT count(*) FROM control_events WHERE soak_run_id = ?", (summary["run_id"],)).fetchone()
     episode_rows = conn.execute("SELECT count(*) FROM episodes WHERE soak_run_id = ?", (summary["run_id"],)).fetchone()
+    feature_rows = conn.execute(
+        "SELECT count(*) FROM decision_features WHERE soak_run_id = ?",
+        (summary["run_id"],),
+    ).fetchone()
     outcome_rows = conn.execute(
         """
         SELECT count(*)
@@ -541,9 +545,11 @@ def test_soak_run_managed_observe_collects_live_metrics(tmp_path: Path) -> None:
     ).fetchone()
     assert control_rows is not None
     assert episode_rows is not None
+    assert feature_rows is not None
     assert outcome_rows is not None
     assert int(control_rows[0]) >= 1
     assert int(episode_rows[0]) >= int(control_rows[0])
+    assert int(feature_rows[0]) >= int(control_rows[0])
     assert int(outcome_rows[0]) >= int(control_rows[0])
     detail_row = conn.execute("SELECT detail_json FROM control_events WHERE soak_run_id = ? LIMIT 1", (summary["run_id"],)).fetchone()
     assert detail_row is not None

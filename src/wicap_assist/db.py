@@ -213,6 +213,23 @@ CREATE TABLE IF NOT EXISTS episode_outcomes (
     FOREIGN KEY(episode_id) REFERENCES episodes(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS decision_features (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    control_session_id INTEGER,
+    soak_run_id INTEGER,
+    episode_id INTEGER,
+    ts TEXT NOT NULL,
+    mode TEXT NOT NULL,
+    policy_profile TEXT NOT NULL,
+    decision TEXT NOT NULL,
+    action TEXT,
+    status TEXT NOT NULL,
+    feature_json TEXT NOT NULL,
+    FOREIGN KEY(control_session_id) REFERENCES control_sessions(id) ON DELETE SET NULL,
+    FOREIGN KEY(soak_run_id) REFERENCES soak_runs(id) ON DELETE SET NULL,
+    FOREIGN KEY(episode_id) REFERENCES episodes(id) ON DELETE SET NULL
+);
+
 CREATE TABLE IF NOT EXISTS schema_migrations (
     version INTEGER PRIMARY KEY,
     name TEXT NOT NULL,
@@ -274,6 +291,32 @@ _MIGRATIONS: tuple[tuple[int, str, tuple[str, ...]], ...] = (
             "CREATE INDEX IF NOT EXISTS idx_episodes_soak_run_ts ON episodes(soak_run_id, ts_started)",
             "CREATE INDEX IF NOT EXISTS idx_episode_events_episode_ts ON episode_events(episode_id, ts)",
             "CREATE INDEX IF NOT EXISTS idx_episode_outcomes_episode_ts ON episode_outcomes(episode_id, ts)",
+        ),
+    ),
+    (
+        3,
+        "decision_feature_store",
+        (
+            "CREATE TABLE IF NOT EXISTS decision_features ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            "control_session_id INTEGER,"
+            "soak_run_id INTEGER,"
+            "episode_id INTEGER,"
+            "ts TEXT NOT NULL,"
+            "mode TEXT NOT NULL,"
+            "policy_profile TEXT NOT NULL,"
+            "decision TEXT NOT NULL,"
+            "action TEXT,"
+            "status TEXT NOT NULL,"
+            "feature_json TEXT NOT NULL,"
+            "FOREIGN KEY(control_session_id) REFERENCES control_sessions(id) ON DELETE SET NULL,"
+            "FOREIGN KEY(soak_run_id) REFERENCES soak_runs(id) ON DELETE SET NULL,"
+            "FOREIGN KEY(episode_id) REFERENCES episodes(id) ON DELETE SET NULL"
+            ")",
+            "CREATE INDEX IF NOT EXISTS idx_decision_features_session_ts ON decision_features(control_session_id, ts)",
+            "CREATE INDEX IF NOT EXISTS idx_decision_features_soak_run_ts ON decision_features(soak_run_id, ts)",
+            "CREATE INDEX IF NOT EXISTS idx_decision_features_episode ON decision_features(episode_id)",
+            "CREATE INDEX IF NOT EXISTS idx_decision_features_action_status_ts ON decision_features(action, status, ts)",
         ),
     ),
 )
@@ -1007,6 +1050,47 @@ def insert_control_event(
     )
     if cur.lastrowid is None:
         raise RuntimeError("Failed to insert control event row")
+    return int(cur.lastrowid)
+
+
+def insert_decision_feature(
+    conn: sqlite3.Connection,
+    *,
+    control_session_id: int | None,
+    soak_run_id: int | None,
+    episode_id: int | None,
+    ts: str,
+    mode: str,
+    policy_profile: str,
+    decision: str,
+    action: str | None,
+    status: str,
+    feature_json: dict[str, Any] | None = None,
+) -> int:
+    """Insert one decision feature row and return primary key."""
+    cur = conn.execute(
+        """
+        INSERT INTO decision_features(
+            control_session_id, soak_run_id, episode_id, ts,
+            mode, policy_profile, decision, action, status, feature_json
+        )
+        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            control_session_id,
+            soak_run_id,
+            episode_id,
+            ts,
+            mode,
+            policy_profile,
+            decision,
+            action,
+            status,
+            json.dumps(feature_json or {}, sort_keys=True),
+        ),
+    )
+    if cur.lastrowid is None:
+        raise RuntimeError("Failed to insert decision feature row")
     return int(cur.lastrowid)
 
 

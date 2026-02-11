@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import sqlite3
 
-from wicap_assist.db import connect_db, insert_control_episode
+from wicap_assist.db import connect_db, insert_control_episode, insert_decision_feature
 
 
 def test_schema_migrations_and_indexes_are_applied(tmp_path: Path) -> None:
@@ -14,7 +14,7 @@ def test_schema_migrations_and_indexes_are_applied(tmp_path: Path) -> None:
             "SELECT version, name FROM schema_migrations ORDER BY version DESC LIMIT 1"
         ).fetchone()
         assert row is not None
-        assert int(row["version"]) >= 2
+        assert int(row["version"]) >= 3
         assert str(row["name"]).strip()
 
         index_names: set[str] = set()
@@ -26,6 +26,7 @@ def test_schema_migrations_and_indexes_are_applied(tmp_path: Path) -> None:
             "episodes",
             "episode_events",
             "episode_outcomes",
+            "decision_features",
         ):
             rows = conn.execute(f"PRAGMA index_list({table})").fetchall()
             for entry in rows:
@@ -39,6 +40,8 @@ def test_schema_migrations_and_indexes_are_applied(tmp_path: Path) -> None:
             "idx_episodes_control_session_ts",
             "idx_episode_events_episode_ts",
             "idx_episode_outcomes_episode_ts",
+            "idx_decision_features_session_ts",
+            "idx_decision_features_action_status_ts",
         }
         assert expected.issubset(index_names)
 
@@ -46,7 +49,7 @@ def test_schema_migrations_and_indexes_are_applied(tmp_path: Path) -> None:
             str(row["name"])
             for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
         }
-        assert {"episodes", "episode_events", "episode_outcomes"}.issubset(table_names)
+        assert {"episodes", "episode_events", "episode_outcomes", "decision_features"}.issubset(table_names)
     finally:
         conn.close()
 
@@ -109,11 +112,12 @@ def test_connect_db_upgrades_legacy_db_with_episode_tables(tmp_path: Path) -> No
         rows = conn.execute("SELECT version FROM schema_migrations ORDER BY version").fetchall()
         versions = {int(row["version"]) for row in rows}
         assert 2 in versions
+        assert 3 in versions
         table_names = {
             str(row["name"])
             for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
         }
-        assert {"episodes", "episode_events", "episode_outcomes"}.issubset(table_names)
+        assert {"episodes", "episode_events", "episode_outcomes", "decision_features"}.issubset(table_names)
     finally:
         conn.close()
 
@@ -144,5 +148,45 @@ def test_insert_control_episode_writes_related_rows(tmp_path: Path) -> None:
         assert str(episode_row["status"]) == "executed_ok"
         assert str(event_row["event_type"]) == "control_event"
         assert str(outcome_row["outcome"]) == "executed_ok"
+    finally:
+        conn.close()
+
+
+def test_insert_decision_feature_writes_row(tmp_path: Path) -> None:
+    conn = connect_db(tmp_path / "assistant.db")
+    try:
+        episode_id = insert_control_episode(
+            conn,
+            control_session_id=None,
+            soak_run_id=None,
+            ts="2026-02-11T08:30:00+00:00",
+            decision="status_check",
+            action="status_check",
+            status="executed_ok",
+            pre_state_json={"alert": ""},
+            post_state_json={"status": "executed_ok"},
+            detail_json={"detail": "ok"},
+        )
+        feature_id = insert_decision_feature(
+            conn,
+            control_session_id=None,
+            soak_run_id=None,
+            episode_id=int(episode_id),
+            ts="2026-02-11T08:30:00+00:00",
+            mode="assist",
+            policy_profile="supervised-v1",
+            decision="status_check",
+            action="status_check",
+            status="executed_ok",
+            feature_json={"down_service_count": 1, "prior_action_success_rate": 0.5},
+        )
+        conn.commit()
+
+        row = conn.execute("SELECT * FROM decision_features WHERE id = ?", (feature_id,)).fetchone()
+        assert row is not None
+        assert int(row["episode_id"]) == int(episode_id)
+        assert str(row["mode"]) == "assist"
+        assert str(row["status"]) == "executed_ok"
+        assert '"down_service_count": 1' in str(row["feature_json"])
     finally:
         conn.close()

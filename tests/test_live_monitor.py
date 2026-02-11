@@ -331,6 +331,7 @@ def test_live_assist_mode_records_control_events(tmp_path: Path, monkeypatch) ->
     event_count = conn.execute("SELECT count(*) FROM control_events").fetchone()[0]
     episode_count = conn.execute("SELECT count(*) FROM episodes").fetchone()[0]
     outcome_count = conn.execute("SELECT count(*) FROM episode_outcomes").fetchone()[0]
+    feature_count = conn.execute("SELECT count(*) FROM decision_features").fetchone()[0]
     session_count = conn.execute("SELECT count(*) FROM control_sessions").fetchone()[0]
     session_status = conn.execute(
         "SELECT status FROM control_sessions ORDER BY id DESC LIMIT 1"
@@ -339,6 +340,7 @@ def test_live_assist_mode_records_control_events(tmp_path: Path, monkeypatch) ->
     assert int(event_count) >= 1
     assert int(episode_count) >= int(event_count)
     assert int(outcome_count) >= int(event_count)
+    assert int(feature_count) >= int(event_count)
     assert int(session_count) == 1
     assert str(session_status) == "completed"
     assert detail_row is not None

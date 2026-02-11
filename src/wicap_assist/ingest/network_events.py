@@ -14,6 +14,7 @@ from wicap_assist.util.evidence import normalize_signature
 
 NETWORK_EVENT_PATTERNS = (
     "captures/wicap_network_events.jsonl",
+    "captures/wicap_anomaly_events.jsonl",
     "captures/suricata_eve_compat.jsonl",
     "captures/zeek_conn_compat.jsonl",
 )
@@ -77,6 +78,14 @@ def _parse_one_record(payload: dict[str, Any], *, file_path: Path, line_number: 
         extra_json["flow"] = payload.get("flow")
     if "severity" in payload:
         extra_json["severity"] = payload.get("severity")
+    if "score" in payload:
+        extra_json["score"] = payload.get("score")
+    if "confidence" in payload:
+        extra_json["confidence"] = payload.get("confidence")
+    if "baseline_maturity" in payload:
+        extra_json["baseline_maturity"] = payload.get("baseline_maturity")
+    if "explanation" in payload:
+        extra_json["explanation"] = payload.get("explanation")
     if "sensor_id" in payload:
         extra_json["sensor_id"] = payload.get("sensor_id")
     if isinstance(payload.get("evidence_ref"), dict):

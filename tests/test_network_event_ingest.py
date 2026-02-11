@@ -48,6 +48,32 @@ def _write_network_events(path: Path) -> None:
     path.write_text("\n".join(json.dumps(payload) for payload in payloads) + "\n", encoding="utf-8")
 
 
+def _write_anomaly_events(path: Path) -> None:
+    payloads = [
+        {
+            "anomaly_contract_version": "wicap.anomaly.v1",
+            "ts": "2026-02-11T09:00:02Z",
+            "category": "anomaly_stream",
+            "signature": "anomaly_stream|global|aa:bb:cc:dd:ee:ff",
+            "sensor_id": "sensor-1",
+            "scope": "global",
+            "score": 82.4,
+            "confidence": 78,
+            "severity": 4,
+            "is_anomaly": True,
+            "baseline_ready": True,
+            "baseline_maturity": 0.93,
+            "baseline_sample_count": 240,
+            "explanation": "deauth_rate drift",
+            "feature_window": {"window_start": 1, "window_end": 2, "event_count": 10},
+            "feature_vector": {"deauth_rate": 4.2},
+            "evidence_event_ids": ["event-1"],
+        }
+    ]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(json.dumps(payload) for payload in payloads) + "\n", encoding="utf-8")
+
+
 def test_scan_network_event_paths_finds_default_contract_stream(monkeypatch, tmp_path: Path) -> None:
     repo_root = tmp_path / "wicap"
     stream = repo_root / "captures" / "wicap_network_events.jsonl"
@@ -78,6 +104,31 @@ def test_ingest_network_events_writes_log_event_rows(monkeypatch, tmp_path: Path
         categories = {str(row["category"]) for row in rows}
         assert "network_anomaly" in categories
         assert "network_flow" in categories
+    finally:
+        conn.close()
+
+
+def test_ingest_network_events_reads_wicap_anomaly_contract_stream(monkeypatch, tmp_path: Path) -> None:
+    repo_root = tmp_path / "wicap"
+    stream = repo_root / "captures" / "wicap_anomaly_events.jsonl"
+    _write_anomaly_events(stream)
+    monkeypatch.setenv("WICAP_REPO_ROOT", str(repo_root))
+
+    conn = connect_db(tmp_path / "assistant.db")
+    try:
+        files_seen, events_added = ingest_network_events(conn)
+        conn.commit()
+        assert int(files_seen) == 1
+        assert int(events_added) == 1
+
+        row = conn.execute(
+            "SELECT category, snippet, extra_json FROM log_events ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        assert row is not None
+        assert str(row["category"]) == "network_anomaly"
+        extra = json.loads(str(row["extra_json"]))
+        assert float(extra["score"]) == 82.4
+        assert int(extra["confidence"]) == 78
     finally:
         conn.close()
 

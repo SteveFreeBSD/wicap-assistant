@@ -15,6 +15,7 @@ from typing import Any
 from wicap_assist.config import wicap_repo_root
 from wicap_assist.db import (
     close_running_control_sessions,
+    insert_decision_feature,
     insert_control_episode,
     insert_control_event,
     insert_control_session,
@@ -22,6 +23,7 @@ from wicap_assist.db import (
     insert_live_observation,
     update_control_session,
 )
+from wicap_assist.decision_features import build_decision_feature_vector, query_prior_action_stats
 from wicap_assist.guardian import (
     GuardianState,
     PlaybookEntry,
@@ -629,6 +631,26 @@ def run_live_monitor(
                     status=status,
                     episode_id=episode_id,
                     detail_json=detail_payload,
+                )
+                prior_stats = query_prior_action_stats(conn, action)
+                feature_vector = build_decision_feature_vector(
+                    event=event,
+                    mode=str(control_mode),
+                    policy_profile=resolved_profile_name,
+                    prior_stats=prior_stats,
+                )
+                insert_decision_feature(
+                    conn,
+                    control_session_id=int(control_session_id),
+                    soak_run_id=None,
+                    episode_id=int(episode_id),
+                    ts=ts,
+                    mode=str(control_mode),
+                    policy_profile=resolved_profile_name,
+                    decision=decision,
+                    action=action,
+                    status=status,
+                    feature_json=feature_vector,
                 )
                 insert_control_session_event(
                     conn,

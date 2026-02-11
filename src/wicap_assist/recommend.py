@@ -18,6 +18,7 @@ from wicap_assist.git_context import (
 )
 from wicap_assist.harness_match import find_relevant_harness_scripts
 from wicap_assist.evidence_query import signature_tokens, where_like
+from wicap_assist.memory_semantic import retrieve_episode_memories
 from wicap_assist.recommend_confidence import (
     calibrate_phase4,
     classify_verification_step,
@@ -304,14 +305,50 @@ def _empty_recommendation_payload(target: str, *, git_context: dict[str, Any] | 
         "verification_step_safety": [],
         "risk_notes": "",
         "verification_steps": [],
+        "memory_episodes": [],
+        "memory_episode_count": 0,
     }
+
+
+def _memory_recommended_action(memory_episodes: list[dict[str, Any]]) -> str | None:
+    for item in memory_episodes:
+        action = item.get("action")
+        status = str(item.get("status", "")).strip().lower()
+        if isinstance(action, str) and action.strip() and status == "executed_ok":
+            return f"Replay historically successful control action: {action.strip()}"
+    return None
+
+
+def _memory_confidence(memory_episodes: list[dict[str, Any]]) -> float:
+    if not memory_episodes:
+        return 0.0
+    best = memory_episodes[0]
+    score = int(best.get("match_score", 0) or 0)
+    base = 0.2
+    bonus = min(0.25, float(score) / 200.0)
+    return round(min(0.45, base + bonus), 3)
 
 
 def build_recommendation(conn: sqlite3.Connection, target: str) -> dict[str, Any]:
     """Build deterministic recommendation JSON payload."""
+    memory_episodes = retrieve_episode_memories(conn, target, limit=3)
+    memory_action = _memory_recommended_action(memory_episodes)
+
     context = _pick_context(conn, target)
     if context is None:
-        return _empty_recommendation_payload(target)
+        payload = _empty_recommendation_payload(target)
+        if memory_action:
+            payload["recommended_action"] = memory_action
+            payload["confidence"] = _memory_confidence(memory_episodes)
+            payload["risk_notes"] = "memory-based recovery suggestion; verify runtime state before execution"
+        payload["memory_episodes"] = memory_episodes
+        payload["memory_episode_count"] = int(len(memory_episodes))
+        return payload
+
+    context_memory_episodes = retrieve_episode_memories(conn, context.signature, limit=3)
+    if context_memory_episodes:
+        memory_episodes = context_memory_episodes
+        memory_action = _memory_recommended_action(memory_episodes)
 
     related_rows = _query_related_signals(conn, context.signature)
     evidence = _related_evidence(related_rows)
@@ -377,16 +414,27 @@ def build_recommendation(conn: sqlite3.Connection, target: str) -> dict[str, Any
     )
 
     sufficient = bool(evidence["fix_sessions"] or related_playbooks or harness_tests)
+    sufficient = bool(sufficient or memory_action)
     if not sufficient:
-        return _empty_recommendation_payload(target, git_context=git_context)
+        payload = _empty_recommendation_payload(target, git_context=git_context)
+        payload["memory_episodes"] = memory_episodes
+        payload["memory_episode_count"] = int(len(memory_episodes))
+        if memory_action:
+            payload["recommended_action"] = memory_action
+            payload["confidence"] = _memory_confidence(memory_episodes)
+            payload["risk_notes"] = "memory-based recovery suggestion; verify runtime state before execution"
+        return payload
 
     if evidence["fix_outcomes"]:
         top_outcome = _clean_outcome_snippet(str(evidence["fix_outcomes"][0][2]))
         recommended_action = f"Apply previously successful fix: {to_snippet(top_outcome, max_len=140)}"
     elif related_playbooks:
         recommended_action = f"Follow historical playbook: {related_playbooks[0]}"
-    else:
+    elif harness_tests:
         recommended_action = f"Run historical harness recovery path: {harness_tests[0]['script']}"
+    else:
+        recommended_action = memory_action or "insufficient historical evidence"
+        confidence = max(confidence, _memory_confidence(memory_episodes))
 
     verification_priority = _dedupe_keep_order(
         [
@@ -434,6 +482,8 @@ def build_recommendation(conn: sqlite3.Connection, target: str) -> dict[str, Any
         "verification_step_safety": verification_step_safety,
         "risk_notes": risk_notes,
         "verification_steps": verification_steps,
+        "memory_episodes": memory_episodes,
+        "memory_episode_count": int(len(memory_episodes)),
     }
 
 

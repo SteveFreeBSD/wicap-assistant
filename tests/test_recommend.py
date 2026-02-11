@@ -199,6 +199,8 @@ def test_recommendation_json_schema_is_stable(tmp_path: Path) -> None:
         "verification_step_safety",
         "risk_notes",
         "verification_steps",
+        "memory_episodes",
+        "memory_episode_count",
     ]
     assert isinstance(parsed["harness_tests"], list)
     assert parsed["harness_tests"]
