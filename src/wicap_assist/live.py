@@ -15,6 +15,7 @@ from typing import Any
 from wicap_assist.config import wicap_repo_root
 from wicap_assist.db import (
     close_running_control_sessions,
+    insert_control_episode,
     insert_control_event,
     insert_control_session,
     insert_control_session_event,
@@ -589,22 +590,49 @@ def run_live_monitor(
                 status = str(event.get("status", ""))
                 if status == "escalated":
                     escalated = True
+                ts = str(event.get("ts", _utc_now_iso()))
+                decision = str(event.get("decision", ""))
+                action = str(event.get("action")) if event.get("action") is not None else None
+                detail_payload = event.get("detail_json", {})
+                if not isinstance(detail_payload, dict):
+                    detail_payload = {}
+                episode_id = insert_control_episode(
+                    conn,
+                    control_session_id=int(control_session_id),
+                    soak_run_id=None,
+                    ts=ts,
+                    decision=decision,
+                    action=action,
+                    status=status,
+                    pre_state_json={
+                        "alert": str(observation.get("alert", "")),
+                        "service_status": observation.get("service_status", {}),
+                        "top_signatures": observation.get("top_signatures", []),
+                    },
+                    post_state_json={
+                        "control_status": status,
+                        "escalated": bool(escalated),
+                        "observation_cycle": int(total_observations) + 1,
+                    },
+                    detail_json=detail_payload,
+                )
                 insert_control_event(
                     conn,
                     soak_run_id=None,
-                    ts=str(event.get("ts", _utc_now_iso())),
-                    decision=str(event.get("decision", "")),
-                    action=str(event.get("action")) if event.get("action") is not None else None,
+                    ts=ts,
+                    decision=decision,
+                    action=action,
                     status=status,
-                    detail_json=event.get("detail_json", {}) if isinstance(event.get("detail_json"), dict) else {},
+                    episode_id=episode_id,
+                    detail_json=detail_payload,
                 )
                 insert_control_session_event(
                     conn,
                     control_session_id=int(control_session_id),
-                    ts=str(event.get("ts", _utc_now_iso())),
+                    ts=ts,
                     phase="live_cycle",
                     status=status,
-                    detail_json=event.get("detail_json", {}) if isinstance(event.get("detail_json"), dict) else {},
+                    detail_json=detail_payload,
                 )
 
             total_observations += 1

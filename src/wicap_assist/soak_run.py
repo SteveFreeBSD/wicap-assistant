@@ -17,6 +17,7 @@ from wicap_assist.bundle import build_bundle
 from wicap_assist.config import wicap_repo_root
 from wicap_assist.db import (
     close_running_control_sessions,
+    insert_control_episode,
     insert_control_event,
     insert_control_session,
     insert_control_session_event,
@@ -414,6 +415,7 @@ def run_supervised_soak(
             "post_run_cleanup": bool(post_run_cleanup),
             "control_actions_executed": 0,
             "control_escalations": 0,
+            "control_episode_count": 0,
             "control_events_count": 0,
             "escalation_hard_stop": False,
             "escalation_reason": None,
@@ -517,6 +519,15 @@ def run_supervised_soak(
             "decision": "preflight_startup",
             "action": str(action),
             "status": action_status,
+            "pre_state_json": {
+                "phase": "preflight_init",
+                "managed_observe": bool(managed_observe),
+                "control_mode": str(control_mode),
+            },
+            "post_state_json": {
+                "phase": "preflight_init",
+                "action_status": action_status,
+            },
             "detail_json": {
                 "commands": action_commands,
                 "detail": action_detail,
@@ -650,6 +661,23 @@ def run_supervised_soak(
 
                     cycle_control_events = control_policy.process_observation(observation)
                     for event in cycle_control_events:
+                        if isinstance(event, dict):
+                            event.setdefault(
+                                "pre_state_json",
+                                {
+                                    "cycle": int(observation_cycles),
+                                    "alert": alert_value,
+                                    "down_services": sorted(down_services),
+                                    "top_signatures": top_signatures if isinstance(top_signatures, list) else [],
+                                },
+                            )
+                            event.setdefault(
+                                "post_state_json",
+                                {
+                                    "cycle": int(observation_cycles),
+                                    "status": str(event.get("status", "")),
+                                },
+                            )
                         control_events.append(event)
                         status = str(event.get("status", ""))
                         if status.startswith("executed_"):
@@ -790,6 +818,23 @@ def run_supervised_soak(
             )
             cycle_control_events = control_policy.process_observation(observation)
             for event in cycle_control_events:
+                if isinstance(event, dict):
+                    event.setdefault(
+                        "pre_state_json",
+                        {
+                            "cycle": int(observation_cycles),
+                            "alert": alert_value,
+                            "down_services": sorted(final_down_services),
+                            "top_signatures": top_signatures if isinstance(top_signatures, list) else [],
+                        },
+                    )
+                    event.setdefault(
+                        "post_state_json",
+                        {
+                            "cycle": int(observation_cycles),
+                            "status": str(event.get("status", "")),
+                        },
+                    )
                 control_events.append(event)
                 status = str(event.get("status", ""))
                 if status.startswith("executed_"):
@@ -839,6 +884,14 @@ def run_supervised_soak(
             "decision": "post_run_cleanup",
             "action": "shutdown",
             "status": cleanup_status,
+            "pre_state_json": {
+                "phase": "finalize",
+                "post_run_cleanup": True,
+            },
+            "post_state_json": {
+                "phase": "finalize",
+                "cleanup_status": cleanup_status,
+            },
             "detail_json": {
                 "commands": cleanup_commands,
                 "detail": cleanup_detail,
@@ -941,6 +994,7 @@ def run_supervised_soak(
             "post_run_cleanup": bool(post_run_cleanup),
             "control_actions_executed": int(control_actions_executed),
             "control_escalations": int(control_escalations),
+            "control_episodes": int(len(control_events)),
             "observation_cycles": int(observation_cycles),
             "alert_cycles": int(alert_cycles),
             "down_service_cycles": int(down_service_cycles),
@@ -972,15 +1026,43 @@ def run_supervised_soak(
         newest_soak_dir=str(newest) if newest is not None else None,
         incident_path=str(incident_path) if incident_path is not None else None,
     )
+    control_episode_count = 0
     for event in control_events:
+        ts = str(event.get("ts", utc_now_iso()))
+        decision = str(event.get("decision", ""))
+        action = str(event.get("action")) if event.get("action") is not None else None
+        status = str(event.get("status", ""))
+        detail_payload = event.get("detail_json", {})
+        if not isinstance(detail_payload, dict):
+            detail_payload = {}
+        pre_state_payload = event.get("pre_state_json", {})
+        if not isinstance(pre_state_payload, dict):
+            pre_state_payload = {}
+        post_state_payload = event.get("post_state_json", {})
+        if not isinstance(post_state_payload, dict):
+            post_state_payload = {}
+        episode_id = insert_control_episode(
+            conn,
+            control_session_id=int(control_session_id) if control_session_id is not None else None,
+            soak_run_id=int(run_id),
+            ts=ts,
+            decision=decision,
+            action=action,
+            status=status,
+            pre_state_json=pre_state_payload,
+            post_state_json=post_state_payload,
+            detail_json=detail_payload,
+        )
+        control_episode_count += 1
         insert_control_event(
             conn,
             soak_run_id=int(run_id),
-            ts=str(event.get("ts", utc_now_iso())),
-            decision=str(event.get("decision", "")),
-            action=str(event.get("action")) if event.get("action") is not None else None,
-            status=str(event.get("status", "")),
-            detail_json=event.get("detail_json", {}) if isinstance(event.get("detail_json"), dict) else {},
+            ts=ts,
+            decision=decision,
+            action=action,
+            status=status,
+            episode_id=episode_id,
+            detail_json=detail_payload,
         )
 
     if control_session_id is not None:
@@ -1052,6 +1134,7 @@ def run_supervised_soak(
             "control_policy_profile": resolved_profile_name,
             "control_actions_executed": int(control_actions_executed),
             "control_escalations": int(control_escalations),
+            "control_episode_count": int(control_episode_count),
             "escalation_hard_stop": bool(escalation_hard_stop),
             "escalation_reason": escalation_reason,
             "snapshot_count": len(snapshot_paths),
@@ -1091,6 +1174,7 @@ def run_supervised_soak(
         "post_run_cleanup": bool(post_run_cleanup),
         "control_actions_executed": int(control_actions_executed),
         "control_escalations": int(control_escalations),
+        "control_episode_count": int(control_episode_count),
         "control_events_count": len(control_events),
         "escalation_hard_stop": bool(escalation_hard_stop),
         "escalation_reason": escalation_reason,

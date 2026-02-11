@@ -179,6 +179,40 @@ CREATE TABLE IF NOT EXISTS control_session_events (
     FOREIGN KEY(control_session_id) REFERENCES control_sessions(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS episodes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    control_session_id INTEGER,
+    soak_run_id INTEGER,
+    ts_started TEXT NOT NULL,
+    ts_ended TEXT,
+    decision TEXT NOT NULL,
+    action TEXT,
+    status TEXT NOT NULL,
+    pre_state_json TEXT NOT NULL,
+    post_state_json TEXT NOT NULL,
+    metadata_json TEXT NOT NULL,
+    FOREIGN KEY(control_session_id) REFERENCES control_sessions(id) ON DELETE SET NULL,
+    FOREIGN KEY(soak_run_id) REFERENCES soak_runs(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS episode_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    episode_id INTEGER NOT NULL,
+    ts TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    FOREIGN KEY(episode_id) REFERENCES episodes(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS episode_outcomes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    episode_id INTEGER NOT NULL,
+    ts TEXT NOT NULL,
+    outcome TEXT NOT NULL,
+    detail_json TEXT NOT NULL,
+    FOREIGN KEY(episode_id) REFERENCES episodes(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS schema_migrations (
     version INTEGER PRIMARY KEY,
     name TEXT NOT NULL,
@@ -199,6 +233,47 @@ _MIGRATIONS: tuple[tuple[int, str, tuple[str, ...]], ...] = (
             "CREATE INDEX IF NOT EXISTS idx_verification_outcomes_signature_ts ON verification_outcomes(signature, ts)",
             "CREATE INDEX IF NOT EXISTS idx_control_events_soak_run_ts ON control_events(soak_run_id, ts)",
             "CREATE INDEX IF NOT EXISTS idx_control_sessions_status_started ON control_sessions(status, started_ts)",
+        ),
+    ),
+    (
+        2,
+        "episode_memory_tiers",
+        (
+            "CREATE TABLE IF NOT EXISTS episodes ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            "control_session_id INTEGER,"
+            "soak_run_id INTEGER,"
+            "ts_started TEXT NOT NULL,"
+            "ts_ended TEXT,"
+            "decision TEXT NOT NULL,"
+            "action TEXT,"
+            "status TEXT NOT NULL,"
+            "pre_state_json TEXT NOT NULL,"
+            "post_state_json TEXT NOT NULL,"
+            "metadata_json TEXT NOT NULL,"
+            "FOREIGN KEY(control_session_id) REFERENCES control_sessions(id) ON DELETE SET NULL,"
+            "FOREIGN KEY(soak_run_id) REFERENCES soak_runs(id) ON DELETE SET NULL"
+            ")",
+            "CREATE TABLE IF NOT EXISTS episode_events ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            "episode_id INTEGER NOT NULL,"
+            "ts TEXT NOT NULL,"
+            "event_type TEXT NOT NULL,"
+            "payload_json TEXT NOT NULL,"
+            "FOREIGN KEY(episode_id) REFERENCES episodes(id) ON DELETE CASCADE"
+            ")",
+            "CREATE TABLE IF NOT EXISTS episode_outcomes ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            "episode_id INTEGER NOT NULL,"
+            "ts TEXT NOT NULL,"
+            "outcome TEXT NOT NULL,"
+            "detail_json TEXT NOT NULL,"
+            "FOREIGN KEY(episode_id) REFERENCES episodes(id) ON DELETE CASCADE"
+            ")",
+            "CREATE INDEX IF NOT EXISTS idx_episodes_control_session_ts ON episodes(control_session_id, ts_started)",
+            "CREATE INDEX IF NOT EXISTS idx_episodes_soak_run_ts ON episodes(soak_run_id, ts_started)",
+            "CREATE INDEX IF NOT EXISTS idx_episode_events_episode_ts ON episode_events(episode_id, ts)",
+            "CREATE INDEX IF NOT EXISTS idx_episode_outcomes_episode_ts ON episode_outcomes(episode_id, ts)",
         ),
     ),
 )
@@ -758,6 +833,147 @@ def insert_live_observation(
     return int(cur.lastrowid)
 
 
+def insert_episode(
+    conn: sqlite3.Connection,
+    *,
+    control_session_id: int | None,
+    soak_run_id: int | None,
+    ts_started: str,
+    ts_ended: str | None,
+    decision: str,
+    action: str | None,
+    status: str,
+    pre_state_json: dict[str, Any] | None = None,
+    post_state_json: dict[str, Any] | None = None,
+    metadata_json: dict[str, Any] | None = None,
+) -> int:
+    """Insert one control episode and return primary key."""
+    cur = conn.execute(
+        """
+        INSERT INTO episodes(
+            control_session_id, soak_run_id, ts_started, ts_ended, decision, action, status,
+            pre_state_json, post_state_json, metadata_json
+        )
+        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            control_session_id,
+            soak_run_id,
+            ts_started,
+            ts_ended,
+            decision,
+            action,
+            status,
+            json.dumps(pre_state_json or {}, sort_keys=True),
+            json.dumps(post_state_json or {}, sort_keys=True),
+            json.dumps(metadata_json or {}, sort_keys=True),
+        ),
+    )
+    if cur.lastrowid is None:
+        raise RuntimeError("Failed to insert episode row")
+    return int(cur.lastrowid)
+
+
+def insert_episode_event(
+    conn: sqlite3.Connection,
+    *,
+    episode_id: int,
+    ts: str,
+    event_type: str,
+    payload_json: dict[str, Any] | None = None,
+) -> int:
+    """Insert one episode event row and return primary key."""
+    cur = conn.execute(
+        """
+        INSERT INTO episode_events(episode_id, ts, event_type, payload_json)
+        VALUES(?, ?, ?, ?)
+        """,
+        (
+            int(episode_id),
+            ts,
+            event_type,
+            json.dumps(payload_json or {}, sort_keys=True),
+        ),
+    )
+    if cur.lastrowid is None:
+        raise RuntimeError("Failed to insert episode event row")
+    return int(cur.lastrowid)
+
+
+def insert_episode_outcome(
+    conn: sqlite3.Connection,
+    *,
+    episode_id: int,
+    ts: str,
+    outcome: str,
+    detail_json: dict[str, Any] | None = None,
+) -> int:
+    """Insert one episode outcome row and return primary key."""
+    cur = conn.execute(
+        """
+        INSERT INTO episode_outcomes(episode_id, ts, outcome, detail_json)
+        VALUES(?, ?, ?, ?)
+        """,
+        (
+            int(episode_id),
+            ts,
+            outcome,
+            json.dumps(detail_json or {}, sort_keys=True),
+        ),
+    )
+    if cur.lastrowid is None:
+        raise RuntimeError("Failed to insert episode outcome row")
+    return int(cur.lastrowid)
+
+
+def insert_control_episode(
+    conn: sqlite3.Connection,
+    *,
+    control_session_id: int | None,
+    soak_run_id: int | None,
+    ts: str,
+    decision: str,
+    action: str | None,
+    status: str,
+    pre_state_json: dict[str, Any] | None = None,
+    post_state_json: dict[str, Any] | None = None,
+    detail_json: dict[str, Any] | None = None,
+) -> int:
+    """Insert one control episode with linked event and outcome rows."""
+    episode_id = insert_episode(
+        conn,
+        control_session_id=control_session_id,
+        soak_run_id=soak_run_id,
+        ts_started=ts,
+        ts_ended=ts,
+        decision=decision,
+        action=action,
+        status=status,
+        pre_state_json=pre_state_json,
+        post_state_json=post_state_json,
+        metadata_json={"source": "control_event"},
+    )
+    payload = dict(detail_json or {})
+    payload.setdefault("decision", str(decision))
+    payload.setdefault("action", str(action) if action is not None else None)
+    payload.setdefault("status", str(status))
+    insert_episode_event(
+        conn,
+        episode_id=episode_id,
+        ts=ts,
+        event_type="control_event",
+        payload_json=payload,
+    )
+    insert_episode_outcome(
+        conn,
+        episode_id=episode_id,
+        ts=ts,
+        outcome=str(status),
+        detail_json=payload,
+    )
+    return int(episode_id)
+
+
 def insert_control_event(
     conn: sqlite3.Connection,
     *,
@@ -766,9 +982,13 @@ def insert_control_event(
     decision: str,
     action: str | None,
     status: str,
+    episode_id: int | None = None,
     detail_json: dict[str, Any] | None = None,
 ) -> int:
     """Insert one control event row and return primary key."""
+    detail_payload = dict(detail_json or {})
+    if episode_id is not None:
+        detail_payload["episode_id"] = int(episode_id)
     cur = conn.execute(
         """
         INSERT INTO control_events(
@@ -782,7 +1002,7 @@ def insert_control_event(
             decision,
             action,
             status,
-            json.dumps(detail_json or {}, sort_keys=True),
+            json.dumps(detail_payload, sort_keys=True),
         ),
     )
     if cur.lastrowid is None:

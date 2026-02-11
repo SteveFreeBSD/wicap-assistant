@@ -507,6 +507,7 @@ def test_soak_run_managed_observe_collects_live_metrics(tmp_path: Path) -> None:
     assert summary["cleanup_status"] == "executed_ok"
     assert summary["cleanup_commands"]
     assert summary["preflight_actions"]
+    assert int(summary["control_episode_count"]) >= int(summary["control_events_count"])
     assert any(item.get("action") == "compose_up" for item in summary["preflight_actions"])
     assert any(item.get("action") == "status_check" for item in summary["preflight_actions"])
     assert observe_calls["count"] >= 2
@@ -528,8 +529,25 @@ def test_soak_run_managed_observe_collects_live_metrics(tmp_path: Path) -> None:
     assert any(str(event.get("event")) == "control_event" for event in progress_events)
     assert any(str(event.get("event")) == "run_complete" for event in progress_events)
     control_rows = conn.execute("SELECT count(*) FROM control_events WHERE soak_run_id = ?", (summary["run_id"],)).fetchone()
+    episode_rows = conn.execute("SELECT count(*) FROM episodes WHERE soak_run_id = ?", (summary["run_id"],)).fetchone()
+    outcome_rows = conn.execute(
+        """
+        SELECT count(*)
+        FROM episode_outcomes eo
+        JOIN episodes ep ON ep.id = eo.episode_id
+        WHERE ep.soak_run_id = ?
+        """,
+        (summary["run_id"],),
+    ).fetchone()
     assert control_rows is not None
+    assert episode_rows is not None
+    assert outcome_rows is not None
     assert int(control_rows[0]) >= 1
+    assert int(episode_rows[0]) >= int(control_rows[0])
+    assert int(outcome_rows[0]) >= int(control_rows[0])
+    detail_row = conn.execute("SELECT detail_json FROM control_events WHERE soak_run_id = ? LIMIT 1", (summary["run_id"],)).fetchone()
+    assert detail_row is not None
+    assert "episode_id" in detail_row["detail_json"]
     preflight_rows = conn.execute(
         "SELECT count(*) FROM control_events WHERE soak_run_id = ? AND decision = 'preflight_startup'",
         (summary["run_id"],),
