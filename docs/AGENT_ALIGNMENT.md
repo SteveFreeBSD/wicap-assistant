@@ -1,63 +1,65 @@
 # WICAP Assistant Agent Alignment
 
 ## Purpose
-Define clear role boundaries, authority order, and change-control rules for Codex, Antigravity (Claude), and the WICAP Assistant project.
+Define role boundaries, authority order, and change-control rules for Codex, Antigravity (Claude), and the WICAP Assistant program while enabling approved cross-repo expansion for network-aware agentic capabilities.
 
 ## Roles
 - Codex:
   - Primary implementation owner for repository changes, tests, migrations, and release-safe integration.
-  - Responsible for deterministic behavior, schema safety, and preserving existing output contracts.
-  - Must not expand scope without explicit approval.
+  - Responsible for deterministic behavior, schema safety, and preserving output contracts.
+  - May implement scope expansion only when the scope is explicitly approved in mission/roadmap/handoff contracts.
 - Antigravity (Claude):
   - Analysis and pattern-mining collaborator focused on evidence interpretation and cross-artifact signal discovery.
   - May propose roadmap-aligned improvements and validation ideas.
-  - Must not directly redefine project scope or bypass approval workflow.
+  - Must not bypass approval workflow or safety guardrails.
 - WICAP Assistant:
-  - Deterministic reliability system that ingests trusted evidence and produces mission-approved outputs.
-  - Must operate within guardrails defined by mission and roadmap.
+  - Deterministic reliability/control system operating within mission and policy constraints.
+  - Must keep autonomous behavior auditable, bounded, and kill-switch governed.
 
 ## Authority Hierarchy
 1. `docs/ASSISTANT_MISSION.md`
 2. `docs/ASSISTANT_ROADMAP.md`
-3. `docs/AGENT_ALIGNMENT.md`
-4. Existing code and implementation details
+3. `docs/CROSS_REPO_INTELLIGENCE_WORKSLICES.md`
+4. `docs/AGENT_ALIGNMENT.md`
+5. Existing code and implementation details
 
 If any lower-level artifact conflicts with a higher-level artifact, the higher-level artifact is authoritative.
 
-## Strict Roadmap Change Workflow
+## Strict Change Workflow
 1. Propose:
-  - Submit a written change proposal tied to a specific roadmap phase.
+  - Submit a written change proposal tied to a roadmap phase or workslice id.
   - Include: objective, scope, non-goals, evidence basis, risk, test plan, and affected files.
   - Explicitly state mission alignment and guardrail compliance.
 2. Approve:
   - Human approval is required before implementation.
-  - No autonomous feature additions, source additions, or command additions before approval.
+  - No autonomous feature/source/surface additions before approval.
 3. Implement:
   - Keep changes minimal and phase-scoped.
   - Preserve stable output contracts unless contract change is explicitly approved.
-  - Include safe migration logic for schema changes.
+  - Include additive migrations for schema changes.
 4. Verify:
-  - Add or update deterministic tests for all changed behavior.
-  - Run full relevant test suite and record results.
-  - Provide concrete evidence (test outputs, deterministic fixture results, or query-backed validation).
+  - Add/update deterministic tests for all changed behavior.
+  - Run relevant suite(s) and record results.
+  - Provide evidence mapping: source -> change -> expected outcome.
 5. Close:
-  - Update roadmap status only after verified implementation.
-  - Document residual risks and follow-up work items.
+  - Update roadmap/workslice status only after verification.
+  - Document residual risks and follow-up items.
 
-## Autonomous Scope Expansion Prohibited
-- No agent may autonomously expand project scope beyond approved mission and roadmap boundaries.
+## Scope Expansion Control
+- No agent may autonomously expand scope beyond approved mission/roadmap/workslice boundaries.
+- Scope expansion is allowed only when explicitly approved and contract-defined.
 - Prohibited without explicit approval:
-  - New product features outside approved phase scope
-  - New ingestion sources
-  - New output types
-  - New operational control paths
-- If scope is ambiguous, stop and request direction before coding.
+  - Unbounded autonomous actions
+  - Unallowlisted operational control paths
+  - Unredacted external telemetry export
+  - Runtime dependence on external internet lookups for control decisions
 
 ## Evidence and Test Requirements
-- Every behavioral change must be backed by evidence from trusted inputs or deterministic fixtures.
-- Every behavioral change must include tests that would fail on regression.
+- Every behavioral change must be backed by trusted evidence or deterministic fixtures.
+- Every behavioral change must include regression tests.
 - Required for completion:
   - Deterministic test coverage for changed logic
-  - Passing test run (`pytest -q`) unless explicitly waived by approver
+  - Passing `pytest -q` (unless explicitly waived)
+  - Contract parity checks for cross-repo integration changes
   - Clear mapping from evidence -> change -> expected outcome
-- No speculative logic may be merged without evidence.
+- No speculative logic may be merged without evidence and tests.

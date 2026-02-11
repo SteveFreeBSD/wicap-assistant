@@ -18,6 +18,7 @@ def test_docs_index_references_authoritative_and_handoff_docs() -> None:
         "ASSISTANT_ROADMAP.md",
         "AGENT_ALIGNMENT.md",
         "HANDOFF_PLAN.md",
+        "CROSS_REPO_INTELLIGENCE_WORKSLICES.md",
     ]
     for doc_name in required:
         assert doc_name in index_text
@@ -30,8 +31,9 @@ def test_alignment_authority_hierarchy_matches_contract() -> None:
     ordered_markers = [
         "1. `docs/ASSISTANT_MISSION.md`",
         "2. `docs/ASSISTANT_ROADMAP.md`",
-        "3. `docs/AGENT_ALIGNMENT.md`",
-        "4. Existing code and implementation details",
+        "3. `docs/CROSS_REPO_INTELLIGENCE_WORKSLICES.md`",
+        "4. `docs/AGENT_ALIGNMENT.md`",
+        "5. Existing code and implementation details",
     ]
 
     positions = [alignment.index(marker) for marker in ordered_markers]
@@ -45,15 +47,22 @@ def test_guardrail_statements_are_present_and_non_conflicting() -> None:
 
     # Mission hard constraints must stay explicit.
     assert "## What This Assistant Must Never Do" in mission
-    assert "network-dependent" in mission.lower()
+    assert "allowlisted" in mission.lower()
     assert "speculative fixes" in mission.lower()
+    assert "otlp" in mission.lower()
 
     # Roadmap and handoff must retain equivalent guardrails.
     assert "## Guardrails" in roadmap
-    assert "local evidence-only" in roadmap.lower()
+    assert "kill-switch" in roadmap.lower()
     assert "## Non-goals" in handoff
-    assert "Do not add new ingestion sources" in handoff
     assert "Do not add LLM-driven" in handoff
+    assert "internet lookups" in handoff.lower()
+
+
+def test_otlp_spec_reference_is_provider_neutral() -> None:
+    workslices = _read_doc("CROSS_REPO_INTELLIGENCE_WORKSLICES.md")
+    assert "https://opentelemetry.io/docs/specs/otlp/" in workslices
+    assert "provider-neutral" in workslices.lower()
 
 
 def test_control_mode_terminology_is_observe_with_monitor_alias_note() -> None:

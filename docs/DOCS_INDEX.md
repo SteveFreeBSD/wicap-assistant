@@ -5,6 +5,7 @@
 - `ASSISTANT_ROADMAP.md`: implementation phases and engineering priorities.
 - `AGENT_ALIGNMENT.md`: role boundaries, authority hierarchy, and change-control rules.
 - `HANDOFF_PLAN.md`: concrete remaining milestones, work slices, and CI gate plan.
+- `CROSS_REPO_INTELLIGENCE_WORKSLICES.md`: cross-repo program plan for memory, learning, anomaly intelligence, and OTLP telemetry.
 - `QUALITY_GATES.md`: enforceable reliability thresholds and release gate checklist.
 
 ## Supporting Engineering Documents

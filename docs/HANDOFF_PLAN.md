@@ -2,9 +2,11 @@
 
 ## Execution Status
 - Milestones 1 through 4 are implemented and covered by the default test suite.
-- Remaining work should be treated as roadmap-driven enhancements, not stabilization debt.
+- Remaining work is roadmap-driven and includes approved cross-repo expansion for memory, adaptive control, network intelligence, and OTLP telemetry.
 
 ## Canonical Operator Workflow
+Program contract reference: `docs/CROSS_REPO_INTELLIGENCE_WORKSLICES.md` (cross-repo execution contract).
+
 WICAP Assistant should be operated as a deterministic evidence pipeline: ingest trusted local artifacts, derive normalized signals, produce ranked triage outputs, and validate recommendations against measurable confidence and recurrence constraints before operational use. Every operator run should be reproducible from local data and testable without network dependencies.
 
 1. Run ingest scans for approved sources (`codex`, `soaks`, `harness`, `antigravity`, `changelog`) into `data/assistant.db`.
@@ -144,12 +146,49 @@ WICAP Assistant should be operated as a deterministic evidence pipeline: ingest 
 - Demo command(s): `PYTHONPATH=src python -m wicap_assist.cli soak-run --duration-minutes 10 --playwright-interval-minutes 2`.
 - Exit criteria: final output includes run id, exit code, newest soak dir, incident path, and key live metrics in one deterministic summary block.
 
+### Milestone 6: Cross-Repo Agentic Intelligence Program (Planned)
+
+#### Work Slice 6.1
+- Goal: Freeze cross-repo contracts (`wicap.event.v1`, `wicap.control.v1`, `wicap.telemetry.v1`) and parity tests.
+- Files likely touched: `docs/CROSS_REPO_INTELLIGENCE_WORKSLICES.md`, runtime contract modules, contract fixture tests in both repos.
+- Tests to add/update: cross-repo parity tests.
+- Demo command(s): `wicap-assist contract-check --enforce --json`.
+- Exit criteria: schema/version drift fails CI in both repos.
+
+#### Work Slice 6.2
+- Goal: Implement plane-separated policy enforcement (runtime/tool/elevated) with deny precedence.
+- Files likely touched: `src/wicap_assist/soak_control.py`, `src/wicap_assist/actuators.py`, `src/wicap_assist/cli.py`.
+- Tests to add/update: control policy matrix tests (observe/assist/autonomous).
+- Demo command(s): `PYTHONPATH=src python -m wicap_assist.cli live --once --control-mode autonomous`.
+- Exit criteria: no action executes unless all policy planes allow it.
+
+#### Work Slice 6.3
+- Goal: Add memory tiers (episodic, semantic retrieval, working memory) and adaptive ranking in shadow mode.
+- Files likely touched: `src/wicap_assist/db.py`, new memory/ranker modules, `src/wicap_assist/live.py`.
+- Tests to add/update: migration tests, retrieval/ranker determinism tests, shadow-mode validation tests.
+- Demo command(s): `PYTHONPATH=src python -m wicap_assist.cli soak-run --dry-run --control-mode autonomous`.
+- Exit criteria: learned ranking is available, auditable, and not executed outside shadow gates.
+
+#### Work Slice 6.4
+- Goal: Integrate WiCAP-native network anomaly envelopes and route anomaly classes into control guidance.
+- Files likely touched: WiCAP event export modules + assistant network ingestion/correlation modules.
+- Tests to add/update: network fixture ingest/correlation tests and control mapping tests.
+- Demo command(s): `PYTHONPATH=src python -m wicap_assist.cli live --once --control-mode assist`.
+- Exit criteria: anomalies produce deterministic, policy-bounded guidance/action proposals.
+
+#### Work Slice 6.5
+- Goal: Add provider-neutral OTLP telemetry emission with redaction governance.
+- Files likely touched: telemetry modules, collector config, redaction policy/tests, docs.
+- Tests to add/update: telemetry contract tests and redaction regression tests.
+- Demo command(s): telemetry smoke command documented in README/HANDOFF.
+- Exit criteria: traces/metrics/logs export via OTLP without sensitive-field leakage.
+
 ## Non-goals
-- Do not add new ingestion sources beyond those already approved in mission/roadmap.
+- Do not add unapproved ingestion sources; only add sources explicitly authorized in mission/roadmap/workslices.
 - Do not add new CLI commands unless required to enforce existing quality gates.
 - Do not add LLM-driven or speculative recommendation generation.
 - Do not add unallowlisted autonomous execution of live operational commands.
-- Do not expand scope into external/network-based data dependencies.
+- Do not make external internet lookups the source of truth for control/recommendation decisions.
 
 ## CI Gates
 - Fail build if `pytest -q` fails anywhere.

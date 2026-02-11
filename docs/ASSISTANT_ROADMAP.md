@@ -40,23 +40,48 @@
 - All adapters are local-first, deterministic, and compliant with mission guardrails.
 
 ## Phase 7 – Stabilization and Single Source of Truth (Completed)
-- Consolidate signature normalization, token extraction, timestamp parsing, and commit overlap scoring into one shared evidence utility.
-- Remove redundant implementations from recommendation, rollup, bundle, playbooks, guardian, daily report, and lineage modules.
-- Align documentation to one canonical workflow and complete CLI command inventory.
-- Keep existing functionality stable while reducing maintenance and calibration drift risk.
+- Consolidated signature normalization, token extraction, timestamp parsing, and commit overlap scoring into one shared evidence utility.
+- Removed redundant implementations from recommendation, rollup, bundle, playbooks, guardian, daily report, and lineage modules.
+- Aligned documentation to one canonical workflow and complete CLI command inventory.
+- Kept existing functionality stable while reducing maintenance and calibration drift risk.
 
-## Phase 8 – Supervised Live Control Layer (In Progress)
-- Implement deterministic supervised control state machine for operator-initiated soak lifecycle runs.
-- Restrict all state-changing actions to explicit allowlisted actuator call points.
-- Persist control state, actions, and escalation outcomes for resume/audit workflows.
-- Expand real-time observability coverage for WICAP runtime and soak ecosystem logs.
+## Phase 8 – Live Control Foundation (In Progress)
+- Implemented deterministic supervised control state machine for operator-initiated soak lifecycle runs.
+- Restricted all state-changing actions to explicit allowlisted actuator call points.
+- Persisted control state, actions, and escalation outcomes for resume/audit workflows.
+- Expanded real-time observability coverage for WICAP runtime and soak ecosystem logs.
+
+## Phase 9 – Plane-Separated Agentic Control (Planned)
+- Implement OpenClaw-style runtime/tool-policy/elevated plane separation with deny-precedence evaluation.
+- Enforce cross-repo control intent contracts (`wicap.control.v1`) and strict policy profile validation.
+- Expand autonomous profiles with explicit rollout gates, shadow mode, and rollback budget controls.
+
+## Phase 10 – Memory Tiers and Learning (Planned)
+- Add episodic memory for action/outcome timelines.
+- Add semantic retrieval over historical incidents and control episodes.
+- Add working-memory context for active sessions and resumable handoffs.
+- Add adaptive action ranking (shadow-mode first, guarded promotion after quality gates).
+
+## Phase 11 – WiCAP-Native Network Intelligence (Planned)
+- Ingest WiCAP-native network envelopes with Suricata/Zeek-compatible field contracts.
+- Correlate anomaly classes to control ladders and verification playbooks.
+- Close false-positive loops with bounded operator feedback and deterministic recalibration.
+
+## Phase 12 – OTLP Telemetry and Observability (Planned)
+- Add provider-neutral OTLP traces/metrics/logs for live control loops and recovery workflows.
+- Add telemetry redaction policy and compliance tests.
+- Add backpressure/failure handling so telemetry delivery never destabilizes control.
+
+## Active Program Plan
+- Detailed cross-repo milestones and work slices live in:
+  - `docs/CROSS_REPO_INTELLIGENCE_WORKSLICES.md`
 
 ## Guardrails
-- Enforce local evidence-only reasoning; no network-dependent source of truth for recommendations.
-- Never execute unallowlisted or autonomous live operational commands.
-- Require explicit operator initiation for any state-changing live action.
-- Never perform autonomous code/config changes to WICAP runtime assets.
-- Never emit speculative fixes; every recommendation must map to stored historical evidence.
+- All state-changing actions must remain allowlisted and auditable.
+- No freeform shell command synthesis from ingested text.
+- No internet lookup may become a runtime recommendation/control source of truth.
+- Cloud/OTLP telemetry is observability only and must pass redaction/security policy.
+- Autonomous execution requires kill-switch, rollback, and explicit profile gates.
 
 ## Success Metrics
 - Reduction in manual triage steps per incident (baseline vs current median).
@@ -64,3 +89,5 @@
 - Mean time to resolution improvement for recurring failure signatures.
 - Recurrence detection accuracy (precision/recall against confirmed recurring incidents).
 - Guardian alert precision for known failure signatures (actionable vs noisy alerts).
+- Autonomous recovery durability (no-relapse window after automated recovery).
+- OTLP telemetry delivery SLO without leaking sensitive fields.

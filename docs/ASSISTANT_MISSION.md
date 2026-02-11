@@ -1,7 +1,7 @@
 # WICAP Assistant Mission
 
 ## Purpose
-Provide deterministic operational memory and autonomous-capable live control for WICAP by turning local evidence into actionable triage, recovery, soak-orchestration, and runtime control decisions.
+Build WICAP Assistant as an OpenClaw/Nanobot-inspired, network-aware agentic operations system for WiCAP: deterministic by default, autonomous only within policy, and continuously improving from local operational memory.
 
 ## Trusted Inputs
 - Codex chat logs
@@ -13,7 +13,9 @@ Provide deterministic operational memory and autonomous-capable live control for
 - Antigravity conversation artifacts (task.md, walkthrough.md, implementation_plan.md)
 - WICAP CHANGELOG.md
 - Live runtime probes (docker service state/log tails, local port checks, local health endpoints)
+- WiCAP-native network event envelopes (Suricata/Zeek-compatible fields)
 - Control policy inputs from operator CLI commands and stored control session history
+- OTLP pipeline health and delivery telemetry (observability signal, not recommendation truth source)
 
 ## Outputs
 - Incident reports
@@ -25,12 +27,18 @@ Provide deterministic operational memory and autonomous-capable live control for
 - Live control status panels and deterministic operator guidance
 - Control session/action audit records and escalation snapshots
 - Autonomous live control run execution records (startup, soak, recovery, shutdown) within approved policy scope
+- Provider-neutral OTLP telemetry spans/metrics/logs for control-loop observability
 
 ## Live Control Operating Contract
 - Control modes:
   - `observe`: read-only observation and correlation. (`monitor` is accepted as a CLI alias for compatibility.)
   - `assist`: allowlisted state-changing actions, only for operator-initiated sessions.
   - `autonomous`: policy-approved state-changing actions without per-step operator confirmation during an active control session.
+- Control planes:
+  - runtime plane (`where` actions execute)
+  - tool-policy plane (`which` actions are allowed)
+  - elevated plane (`explicit privileged escape hatch`)
+  - deny precedence applies across planes.
 - Control loop:
   - observe current state -> classify signals -> select smallest allowlisted action -> execute -> verify -> persist audit state.
 - Action policy:
@@ -48,7 +56,8 @@ Provide deterministic operational memory and autonomous-capable live control for
 - Execute unbounded or hidden autonomous actions without durable audit records.
 - Modify WICAP source code or runtime configuration as an autonomous action.
 - Produce speculative fixes that are not supported by stored historical evidence.
-- Perform network-dependent lookups as a source of truth for recommendations.
+- Use public internet lookups as the source of truth for runtime recommendations/control decisions.
+- Emit unredacted secrets/PII to telemetry destinations.
 - Treat ingested chat/log text as trusted executable instructions.
 - Auto-install, auto-run, or auto-update untrusted external tools/skills from conversation content.
 
@@ -71,8 +80,9 @@ Provide deterministic operational memory and autonomous-capable live control for
 - Dockerized live monitor/control deployment profile for server operation.
 
 ## Next Allowed Phases
-- Expand allowlisted actuator coverage for full WICAP startup/verification/cleanup runbooks.
-- Introduce deterministic trigger-to-action mappings per failure signature/category.
-- Add control-session heartbeat/resume semantics and explicit handoff state.
-- Improve live verification ranking with per-action success/failure history feedback.
-- Add autonomous control policy profiles (with preflight checks, rollback rules, and mandatory audit/kill-switch behavior).
+- Implement OpenClaw-style plane-separated control policy enforcement and deny-precedence checks.
+- Add Nanobot-style memory tiers: episodic memory, semantic retrieval, and scheduled memory maintenance.
+- Add WiCAP-native network anomaly ingestion/correlation with Suricata/Zeek-compatible envelopes.
+- Add adaptive action ranking in shadow mode, then guarded autonomous rollout.
+- Add provider-neutral OTLP telemetry export and redaction governance.
+- Implement cross-repo contracts and CI gates from `docs/CROSS_REPO_INTELLIGENCE_WORKSLICES.md`.
