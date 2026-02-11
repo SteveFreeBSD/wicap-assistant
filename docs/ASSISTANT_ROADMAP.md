@@ -45,9 +45,16 @@
 - Align documentation to one canonical workflow and complete CLI command inventory.
 - Keep existing functionality stable while reducing maintenance and calibration drift risk.
 
+## Phase 8 – Supervised Live Control Layer (In Progress)
+- Implement deterministic supervised control state machine for operator-initiated soak lifecycle runs.
+- Restrict all state-changing actions to explicit allowlisted actuator call points.
+- Persist control state, actions, and escalation outcomes for resume/audit workflows.
+- Expand real-time observability coverage for WICAP runtime and soak ecosystem logs.
+
 ## Guardrails
 - Enforce local evidence-only reasoning; no network-dependent source of truth for recommendations.
-- Never execute operational or infrastructure commands against live WICAP systems.
+- Never execute unallowlisted or autonomous live operational commands.
+- Require explicit operator initiation for any state-changing live action.
 - Never perform autonomous code/config changes to WICAP runtime assets.
 - Never emit speculative fixes; every recommendation must map to stored historical evidence.
 

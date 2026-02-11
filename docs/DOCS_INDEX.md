@@ -8,8 +8,9 @@
 - `QUALITY_GATES.md`: enforceable reliability thresholds and release gate checklist.
 
 ## Supporting Engineering Documents
-- `ARCHITECT_REVIEW.md`: historical architecture audit snapshot.
-- `REVIEW_WALKTHROUGH.md`: historical validation walkthrough snapshot.
+- `archive/ARCHITECT_REVIEW.md`: historical architecture audit snapshot.
+- `archive/REVIEW_WALKTHROUGH.md`: historical validation walkthrough snapshot.
+- `LIVE_CONTROL_RESEARCH.md`: external controller/automation pattern survey mapped to WICAP live control design.
 
 ## Documentation Rules
 - Update `ASSISTANT_MISSION.md` first when scope/guardrails change.

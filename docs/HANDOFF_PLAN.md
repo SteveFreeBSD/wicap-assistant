@@ -107,11 +107,48 @@ WICAP Assistant should be operated as a deterministic evidence pipeline: ingest 
 - Demo command(s): `pytest -q tests/test_docs_contract.py && pytest -q`.
 - Exit criteria: checklist is complete, linked in docs index, and all required gates pass.
 
+### Milestone 5: Live Control Agent – Managed Soak Operations (In Progress)
+
+#### Work Slice 5.1
+- Goal: Learn deterministic soak startup profiles from historical session commands/outcomes and apply them in supervised runs.
+- Files likely touched: `src/wicap_assist/soak_profiles.py`, `src/wicap_assist/soak_run.py`, `tests/test_soak_profiles.py`, `tests/test_soak_run.py`.
+- Tests to add/update: `tests/test_soak_profiles.py`, `tests/test_soak_run.py`.
+- Demo command(s): `PYTHONPATH=src python -m wicap_assist.cli soak-run --dry-run`.
+- Exit criteria: `soak-run` shows selected learned profile evidence and resolved effective args without executing arbitrary commands.
+
+#### Work Slice 5.2
+- Goal: Add a managed soak session state machine that executes allowlisted phases in order: preflight/init, soak run, observe, ingest, incident summary.
+- Files likely touched: `src/wicap_assist/soak_run.py`, `src/wicap_assist/live.py`, `src/wicap_assist/db.py`, `tests/test_soak_run.py`, `tests/test_live_monitor.py`.
+- Tests to add/update: `tests/test_soak_run.py`, `tests/test_live_monitor.py`.
+- Demo command(s): `PYTHONPATH=src python -m wicap_assist.cli soak-run --duration-minutes 30 --playwright-interval-minutes 5`.
+- Exit criteria: one command produces run log, live observation rows, ingest updates, and incident output with a single final run summary.
+
+#### Work Slice 5.3
+- Goal: Add deterministic babysit metrics during managed soak sessions (service uptime/restarts, error signature rate, verification check snapshots).
+- Files likely touched: `src/wicap_assist/live.py`, `src/wicap_assist/probes/docker_probe.py`, `src/wicap_assist/db.py`, `tests/test_live_monitor.py`.
+- Tests to add/update: `tests/test_live_monitor.py`.
+- Demo command(s): `PYTHONPATH=src python -m wicap_assist.cli live --once`.
+- Exit criteria: observation panel includes service state + top signatures + safe verify steps, and data is persisted in `live_observations`.
+
+#### Work Slice 5.4
+- Goal: Add guardrails for live control sessions so only allowlisted WICAP harness entrypoints and flags can execute.
+- Files likely touched: `src/wicap_assist/soak_run.py`, `src/wicap_assist/cli.py`, `tests/test_soak_run.py`, `tests/test_readme_commands_smoke.py`.
+- Tests to add/update: `tests/test_soak_run.py`.
+- Demo command(s): `PYTHONPATH=src python -m wicap_assist.cli soak-run --dry-run`.
+- Exit criteria: invalid/non-allowlisted execution paths are rejected deterministically and covered by tests.
+
+#### Work Slice 5.5
+- Goal: Consolidate live soak operator output into one concise session report artifact for review and handoff.
+- Files likely touched: `src/wicap_assist/soak_run.py`, `src/wicap_assist/incident.py`, `README.md`, `tests/test_soak_run.py`.
+- Tests to add/update: `tests/test_soak_run.py`.
+- Demo command(s): `PYTHONPATH=src python -m wicap_assist.cli soak-run --duration-minutes 10 --playwright-interval-minutes 2`.
+- Exit criteria: final output includes run id, exit code, newest soak dir, incident path, and key live metrics in one deterministic summary block.
+
 ## Non-goals
 - Do not add new ingestion sources beyond those already approved in mission/roadmap.
 - Do not add new CLI commands unless required to enforce existing quality gates.
 - Do not add LLM-driven or speculative recommendation generation.
-- Do not add autonomous execution of live operational commands.
+- Do not add unallowlisted autonomous execution of live operational commands.
 - Do not expand scope into external/network-based data dependencies.
 
 ## CI Gates

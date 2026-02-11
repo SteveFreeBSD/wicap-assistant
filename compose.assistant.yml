@@ -1,0 +1,49 @@
+services:
+  wicap-assist-live:
+    profiles: ["observe"]
+    build: .
+    network_mode: host
+    environment:
+      - WICAP_REPO_ROOT=/wicap
+    volumes:
+      - ./data:/app/data
+      - /home/steve/apps/wicap:/wicap:ro
+    command: ["live", "--interval", "10", "--control-mode", "observe"]
+    restart: unless-stopped
+
+  wicap-assist-control:
+    profiles: ["control"]
+    build: .
+    network_mode: host
+    environment:
+      - WICAP_REPO_ROOT=/wicap
+    volumes:
+      - ./data:/app/data
+      - /home/steve/apps/wicap:/wicap
+      - /var/run/docker.sock:/var/run/docker.sock
+    command:
+      [
+        "live",
+        "--interval",
+        "10",
+        "--control-mode",
+        "assist",
+        "--control-check-threshold",
+        "2",
+        "--control-recover-threshold",
+        "4",
+      ]
+    restart: unless-stopped
+
+  wicap-assist:
+    profiles: ["control"]
+    build: .
+    network_mode: host
+    environment:
+      - WICAP_REPO_ROOT=/wicap
+    volumes:
+      - ./data:/app/data
+      - /home/steve/apps/wicap:/wicap
+      - /var/run/docker.sock:/var/run/docker.sock
+    stdin_open: true
+    tty: true

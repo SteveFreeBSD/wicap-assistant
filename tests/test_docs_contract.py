@@ -54,3 +54,10 @@ def test_guardrail_statements_are_present_and_non_conflicting() -> None:
     assert "## Non-goals" in handoff
     assert "Do not add new ingestion sources" in handoff
     assert "Do not add LLM-driven" in handoff
+
+
+def test_control_mode_terminology_is_observe_with_monitor_alias_note() -> None:
+    mission = _read_doc("ASSISTANT_MISSION.md")
+    assert "`observe`" in mission
+    assert "monitor" in mission.lower()
+    assert "alias" in mission.lower()
