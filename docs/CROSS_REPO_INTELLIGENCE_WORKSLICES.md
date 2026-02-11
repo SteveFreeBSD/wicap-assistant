@@ -1,8 +1,14 @@
 # Cross-Repo Intelligent Agent Integration Plan
 
-Status: Proposed
+Status: In Progress (M0 artifacts implemented: contract files + parity tests)
 Owners: WiCAP Core + wicap-assistant
 Canonical chain: `ASSISTANT_MISSION.md` -> `ASSISTANT_ROADMAP.md` -> this file
+
+## 0. Implementation Snapshot
+- Implemented M0 baseline artifacts in both repos:
+  - WiCAP: `ops/contracts/wicap.event.v1.json`, `ops/contracts/wicap.control.v1.json`, contract fixture exports, schema tests.
+  - Assistant: `ops/contracts/wicap.telemetry.v1.json`, WiCAP contract fixtures, parity tests.
+- Remaining M0 work: CI pipeline wiring for mandatory contract parity gate in both repos.
 
 ## 1. Program Goal
 Build a WiCAP-native autonomous control agent with durable memory, adaptive learning, network anomaly intelligence, and secure cloud telemetry without breaking deterministic safety guarantees.

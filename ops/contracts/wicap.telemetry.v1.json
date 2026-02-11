@@ -1,0 +1,35 @@
+{
+  "name": "wicap-telemetry-envelope",
+  "version": "1.0.0",
+  "schema": "wicap.telemetry.v1",
+  "telemetry_event_version": "wicap.telemetry.v1",
+  "protocol": "otlp",
+  "required_signal_types": [
+    "traces",
+    "metrics",
+    "logs"
+  ],
+  "required_resource_attributes": [
+    "service.name",
+    "service.version",
+    "deployment.environment"
+  ],
+  "required_span_attributes": [
+    "wicap.control.mode",
+    "wicap.control.profile",
+    "wicap.control.decision"
+  ],
+  "required_metric_names": [
+    "wicap.control.observation.cycles",
+    "wicap.control.actions.executed",
+    "wicap.anomaly.events.total"
+  ],
+  "required_log_fields": [
+    "timestamp",
+    "severity_text",
+    "body",
+    "attributes"
+  ],
+  "redaction_required": true,
+  "otlp_spec_reference": "https://opentelemetry.io/docs/specs/otlp/"
+}
