@@ -1,14 +1,51 @@
 # wicap-assistant
 
-Deterministic WICAP reliability assistant: ingest local operational evidence, correlate failures, and generate structured triage outputs.
+Deterministic reliability/control assistant for WiCAP. It can run as:
+- A read-only runtime observer
+- A supervised assist controller with allowlisted actions
+- A guarded autonomous control loop with rollback and kill-switches
+
+It is network-aware and memory-backed, but policy-bounded: it does not execute arbitrary commands.
+
+## What It Does
+- Ingests evidence from WiCAP logs, harness scripts, network contract streams, changelogs, and Codex artifacts.
+- Correlates recurring failures and generates deterministic recommendations/playbooks.
+- Runs live control loops (`observe`, `assist`, `autonomous`) with audit trails.
+- Persists memory artifacts for decisions, outcomes, and working context across sessions.
+- Emits OTLP-aligned telemetry envelopes with redaction controls.
+
+## Live Control Modes
+- `observe` (alias: `monitor`)
+  - Read-only; reports health, signatures, and recommended next actions.
+- `assist`
+  - Executes allowlisted recovery actions under policy controls.
+- `autonomous`
+  - Enables autonomous policy profile with rollback sequence + kill-switch checks.
+
+## Agent Behavior Model
+The assistant follows a deterministic sense-decide-act loop:
+1. Sense: probe docker/network/http status and ingest recent signatures/anomaly events.
+2. Decide: combine historical evidence, anomaly routing, and shadow-ranked action context.
+3. Act: execute only allowlisted actions when mode/policy permits.
+4. Learn: persist decision features, episodes, outcomes, and working-memory state.
+5. Guide: emit operator guidance and promotion gate metrics.
+
+## Safety Model
+- Action allowlist only (`status_check`, `compose_up`, `shutdown`, `restart_service:<allowlisted>`).
+- Plane-separated policy checks (runtime/tool/elevated).
+- Autonomous kill-switches:
+  - env: `WICAP_ASSIST_AUTONOMOUS_KILL_SWITCH=1`
+  - sentinel file: `<WICAP_REPO_ROOT>/.wicap_assist_autonomous.kill`
+- Rollback ladder support in autonomous policy profile.
+- Runtime contract gate available pre-run (`contract-check --enforce`).
 
 ## Requirements
 - Python 3.11+
-- Local filesystem access to WICAP and local evidence directories
+- Local filesystem access to WiCAP and local evidence directories
 - No network required for ingest/recommend/report workflows
 
-## Configuration
-- `WICAP_REPO_ROOT`: override the WICAP repo path (default: `~/apps/wicap`).
+## Key Configuration
+- `WICAP_REPO_ROOT`: override the WiCAP repo path (default: `~/apps/wicap`).
 - `CODEX_HOME`: override Codex artifact root (default: `~/.codex`).
 - `WICAP_ASSIST_OTLP_PROFILE`: telemetry export profile (`disabled`, `self_hosted`, `vendor`, `cloud`).
 - `WICAP_ASSIST_OTLP_HTTP_ENDPOINT`: OTLP HTTP endpoint for control-loop telemetry export.
@@ -25,8 +62,42 @@ python -m pip install -e .
 If the `wicap-assist` entrypoint is not on your shell `PATH`, run commands as
 `PYTHONPATH=src python -m wicap_assist.cli <command> ...`.
 
-## Docker (Optional Sidecar)
-Build/run with docker compose:
+## Fresh System Bootstrap
+Use the assistant to interactively generate/update WiCAP's `.env`:
+```bash
+wicap-assist setup-wicap-env
+```
+This prompts for required runtime values including SQL host/database/user/password and internal secret.
+
+## Live Control Quickstart
+Preflight runtime contract:
+```bash
+wicap-assist contract-check --enforce
+```
+
+Read-only live monitor:
+```bash
+wicap-assist live --interval 10 --once --control-mode observe
+```
+
+Assist mode live control:
+```bash
+wicap-assist live --interval 10 --control-mode assist
+```
+
+Autonomous supervised soak:
+```bash
+wicap-assist soak-run --duration-minutes 30 --playwright-interval-minutes 5 --control-mode autonomous
+```
+
+Interactive agent console:
+```bash
+wicap-assist agent --control-mode assist
+```
+The console supports prompts like `status`, `start soak for 10 minutes assist`, `recommend <target>`, `incident <target>`.
+
+## Docker Sidecar (Optional)
+Build/run with compose:
 ```bash
 docker compose -f compose.assistant.yml build
 docker compose -f compose.assistant.yml --profile observe up -d wicap-assist-live
@@ -41,10 +112,16 @@ docker compose -f compose.assistant.yml --profile control run --rm wicap-assist 
 docker compose -f compose.assistant.yml --profile control run --rm -it wicap-assist agent --control-mode assist
 ```
 Notes:
-- The compose file mounts the WICAP repo at `/wicap` and sets `WICAP_REPO_ROOT=/wicap`.
+- The compose file mounts the WiCAP repo at `/wicap` and sets `WICAP_REPO_ROOT=/wicap`.
 - `wicap-assist-live` is monitor-only (`--control-mode observe`) and does not mount `/var/run/docker.sock`.
 - `wicap-assist-control` is the live control loop (`--control-mode assist`) using allowlisted recovery actions.
 - `wicap-assist-control` and interactive `wicap-assist` mount `/var/run/docker.sock` for allowlisted control actions.
+
+## Memory and Learning Surfaces
+- Episodic memory: control episodes/events/outcomes persisted per decision path.
+- Working memory: unresolved signatures + pending actions retained across resumed sessions.
+- Decision feature store: contextual vectors, shadow ranking output, and reward labels.
+- Shadow quality gate: learned ranking remains non-authoritative until gate thresholds pass.
 
 ## Canonical Workflow
 1. Bootstrap WiCAP `.env` on fresh systems
