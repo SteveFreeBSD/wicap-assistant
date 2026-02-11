@@ -26,7 +26,7 @@ from wicap_assist.recommend_confidence import (
 from wicap_assist.util.evidence import normalize_signature, parse_utc_datetime
 from wicap_assist.util.redact import to_snippet
 
-_LOG_CATEGORIES = ("error", "docker_fail", "pytest_fail")
+_LOG_CATEGORIES = ("error", "docker_fail", "pytest_fail", "network_anomaly", "network_flow")
 _SIGNAL_CATEGORIES = ("outcomes", "commands", "file_paths", "errors")
 _FIX_RE = re.compile(r"\b(?:fixed|resolved)\b", re.IGNORECASE)
 _SUCCESS_RE = re.compile(r"\b(?:fixed|resolved|success)\b", re.IGNORECASE)
@@ -55,12 +55,14 @@ def _pick_context(conn: sqlite3.Connection, target: str) -> SignatureContext | N
     target_norm = normalize_signature(target_raw)
     target_lower = target_raw.lower()
 
+    category_placeholders = ", ".join("?" for _ in _LOG_CATEGORIES)
     rows = conn.execute(
-        """
+        f"""
         SELECT category, snippet, ts_text, file_path
         FROM log_events
-        WHERE category IN ('error', 'docker_fail', 'pytest_fail')
-        """
+        WHERE category IN ({category_placeholders})
+        """,
+        tuple(_LOG_CATEGORIES),
     ).fetchall()
 
     buckets: dict[tuple[str, str], dict[str, Any]] = {}

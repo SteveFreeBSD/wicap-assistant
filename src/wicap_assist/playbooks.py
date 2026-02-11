@@ -28,7 +28,7 @@ WICAP_REPO_ROOT = wicap_repo_root()
 PLAYBOOKS_DIR = default_playbooks_dir(repo_root=WICAP_REPO_ROOT)
 INDEX_PATH = PLAYBOOKS_DIR / "INDEX.md"
 
-_CATEGORIES = ("error", "docker_fail", "pytest_fail")
+_CATEGORIES = ("error", "docker_fail", "pytest_fail", "network_anomaly", "network_flow")
 _SIGNAL_CATEGORIES = ("errors", "commands", "file_paths", "outcomes")
 _PATH_HINT_RE = re.compile(r"\b(?:src|wicap-ui)/[A-Za-z0-9_./-]+")
 _SERVICE_RE = re.compile(r"\b(?:wicap|redis|sql|odbc|docker|systemd)\b", re.IGNORECASE)
@@ -47,12 +47,14 @@ def _slugify(text: str, *, max_len: int = 64) -> str:
 
 
 def _cluster_failures(conn: sqlite3.Connection, top_n: int) -> list[dict[str, Any]]:
+    placeholders = ", ".join("?" for _ in _CATEGORIES)
     rows = conn.execute(
-        """
+        f"""
         SELECT category, snippet, file_path
         FROM log_events
-        WHERE category IN ('error', 'docker_fail', 'pytest_fail')
-        """
+        WHERE category IN ({placeholders})
+        """,
+        tuple(_CATEGORIES),
     ).fetchall()
 
     clusters: dict[tuple[str, str], dict[str, Any]] = {}

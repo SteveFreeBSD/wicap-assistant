@@ -23,7 +23,7 @@ from wicap_assist.config import wicap_repo_root
 from wicap_assist.util.evidence import normalize_signature
 from wicap_assist.util.redact import to_snippet
 
-_ALERT_CATEGORIES = {"error", "docker_fail", "pytest_fail"}
+_ALERT_CATEGORIES = {"error", "docker_fail", "pytest_fail", "network_anomaly", "network_flow"}
 
 
 def _table_exists(conn: sqlite3.Connection, name: str) -> bool:

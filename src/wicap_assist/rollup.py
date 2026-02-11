@@ -26,9 +26,12 @@ from wicap_assist.incident import default_incidents_dir
 from wicap_assist.playbooks import default_playbooks_dir
 from wicap_assist.util.evidence import normalize_signature, parse_utc_datetime
 
-_CATEGORIES = ("error", "docker_fail", "pytest_fail")
+_CATEGORIES = ("error", "docker_fail", "pytest_fail", "network_anomaly", "network_flow")
 _INCIDENT_DATE_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})-")
-_INCIDENT_CAT_RE = re.compile(r"^###\s+(error|docker_fail|pytest_fail)\s*$", re.IGNORECASE)
+_INCIDENT_CAT_RE = re.compile(
+    r"^###\s+(error|docker_fail|pytest_fail|network_anomaly|network_flow)\s*$",
+    re.IGNORECASE,
+)
 
 
 def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
@@ -231,13 +234,15 @@ def generate_rollup(
             end=now_utc,
         )
 
+    placeholders = ", ".join("?" for _ in _CATEGORIES)
     rows = conn.execute(
-        """
+        f"""
         SELECT le.category, le.snippet, le.ts_text, s.mtime
         FROM log_events AS le
         JOIN sources AS s ON s.id = le.source_id
-        WHERE le.category IN ('error', 'docker_fail', 'pytest_fail')
-        """
+        WHERE le.category IN ({placeholders})
+        """,
+        tuple(_CATEGORIES),
     ).fetchall()
 
     grouped: dict[tuple[str, str], dict[str, Any]] = {}

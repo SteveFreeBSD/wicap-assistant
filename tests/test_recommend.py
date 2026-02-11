@@ -143,6 +143,41 @@ def test_unknown_signature_returns_zero_confidence(tmp_path: Path) -> None:
     conn.close()
 
 
+def test_network_anomaly_signature_is_considered_for_recommendation(tmp_path: Path) -> None:
+    conn = connect_db(tmp_path / "assistant.db")
+    cur = conn.cursor()
+
+    log_path = tmp_path / "captures" / "wicap_network_events.jsonl"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text("sample\n", encoding="utf-8")
+
+    cur.execute(
+        "INSERT INTO sources(kind, path, mtime, size) VALUES(?, ?, ?, ?)",
+        ("network_event_log", str(log_path), 1.0, 10),
+    )
+    source_id = int(cur.lastrowid)
+    snippet = "deauth|lab-net|11:22:33:44:55:66"
+    cur.execute(
+        """
+        INSERT INTO log_events(source_id, ts_text, category, fingerprint, snippet, file_path, extra_json)
+        VALUES(?, ?, 'network_anomaly', ?, ?, ?, '{}')
+        """,
+        (
+            source_id,
+            "2026-02-11T09:00:00Z",
+            "net-1",
+            snippet,
+            str(log_path),
+        ),
+    )
+    conn.commit()
+
+    payload = build_recommendation(conn, snippet)
+    assert payload["input"] == snippet
+    assert "confidence" in payload
+    conn.close()
+
+
 def test_recommendation_json_schema_is_stable(tmp_path: Path) -> None:
     conn = connect_db(tmp_path / "assistant.db")
     _, signature = _seed_known_incident(conn, tmp_path)

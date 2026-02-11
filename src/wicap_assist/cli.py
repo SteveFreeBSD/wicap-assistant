@@ -42,6 +42,7 @@ from wicap_assist.fix_lineage import (
 )
 from wicap_assist.ingest.codex_jsonl import parse_codex_file, scan_codex_paths, source_kind_for
 from wicap_assist.ingest.harness_scripts import ingest_harness_scripts
+from wicap_assist.ingest.network_events import ingest_network_events
 from wicap_assist.ingest.soak_logs import ingest_soak_logs
 from wicap_assist.ingest.antigravity_logs import ingest_antigravity_logs
 from wicap_assist.ingest.changelog import ingest_changelog
@@ -82,6 +83,7 @@ def _run_ingest(
     scan_harness: bool,
     scan_antigravity: bool,
     scan_changelog: bool,
+    scan_network_events: bool = False,
 ) -> int:
     conn = connect_db(db_path)
     started_ts = utc_now_iso()
@@ -97,6 +99,7 @@ def _run_ingest(
     changelog_entries_added = 0
     changelog_entries_total = 0
     changelog_sources_seen = 0
+    network_events_added = 0
     harness_summary = None
 
     if scan_codex:
@@ -154,6 +157,10 @@ def _run_ingest(
         harness_files_seen, harness_summary = ingest_harness_scripts(conn)
         files_seen += harness_files_seen
 
+    if scan_network_events:
+        network_files_seen, network_events_added = ingest_network_events(conn)
+        files_seen += network_files_seen
+
     if scan_antigravity:
         ag_dirs, ag_convs, ag_signals, ag_outcomes = ingest_antigravity_logs(conn)
         files_seen += ag_dirs
@@ -188,7 +195,7 @@ def _run_ingest(
     print(
         f"Ingest complete: files_seen={files_seen} "
         f"sessions_added={sessions_added} signals_added={signals_added} "
-        f"log_events_added={log_events_added} db={db_path}"
+        f"log_events_added={log_events_added} network_events_added={network_events_added} db={db_path}"
     )
     if scan_antigravity:
         print(
@@ -625,6 +632,11 @@ def build_parser() -> argparse.ArgumentParser:
     ingest_parser.add_argument("--scan-codex", action="store_true", help="Scan configured Codex paths")
     ingest_parser.add_argument("--scan-soaks", action="store_true", help="Scan WICAP soak log paths")
     ingest_parser.add_argument("--scan-harness", action="store_true", help="Scan WICAP harness scripts")
+    ingest_parser.add_argument(
+        "--scan-network-events",
+        action="store_true",
+        help="Scan WiCAP network event contract artifacts (wicap.event.v1 JSONL)",
+    )
     ingest_parser.add_argument("--scan-antigravity", action="store_true", help="Scan Antigravity conversation artifacts")
     ingest_parser.add_argument("--scan-changelog", action="store_true", help="Scan WICAP CHANGELOG.md")
 
@@ -877,13 +889,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "ingest":
         scan_flags = [
             args.scan_codex, args.scan_soaks, args.scan_harness,
-            args.scan_antigravity, args.scan_changelog,
+            args.scan_antigravity, args.scan_changelog, args.scan_network_events,
         ]
         if not any(scan_flags):
             parser.error(
                 "ingest requires at least one --scan-* flag "
                 "(--scan-codex, --scan-soaks, --scan-harness, "
-                "--scan-antigravity, --scan-changelog)"
+                "--scan-network-events, --scan-antigravity, --scan-changelog)"
             )
         return _run_ingest(
             db_path,
@@ -892,6 +904,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             scan_harness=args.scan_harness,
             scan_antigravity=args.scan_antigravity,
             scan_changelog=args.scan_changelog,
+            scan_network_events=args.scan_network_events,
         )
 
     if args.command == "triage":
