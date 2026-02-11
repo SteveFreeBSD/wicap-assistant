@@ -212,7 +212,8 @@ def build_operator_guidance(
         add(action)
 
     for event in control_events:
-        action = str(event.get("action", "")).strip()
+        raw_action = event.get("action")
+        action = str(raw_action).strip() if raw_action is not None else ""
         status = str(event.get("status", "")).strip()
         detail = event.get("detail_json", {})
         service = ""

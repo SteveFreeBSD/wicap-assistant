@@ -190,3 +190,18 @@ def test_build_operator_guidance_from_control_events() -> None:
     assert guidance[0].startswith("Use learned startup runbook")
     assert any("Status check succeeded" in value for value in guidance)
     assert any("Compose recovery failed" in value for value in guidance)
+
+
+def test_build_operator_guidance_includes_kill_switch_message_for_none_action() -> None:
+    guidance = build_operator_guidance(
+        manager_actions=[],
+        control_events=[
+            {
+                "action": None,
+                "status": "escalated",
+                "detail_json": {"reason": "kill_switch_engaged", "service": "wicap-redis"},
+            }
+        ],
+        control_mode="autonomous",
+    )
+    assert any("kill-switch engaged" in value.lower() for value in guidance)
