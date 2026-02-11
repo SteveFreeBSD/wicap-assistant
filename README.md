@@ -10,6 +10,12 @@ Deterministic WICAP reliability assistant: ingest local operational evidence, co
 ## Configuration
 - `WICAP_REPO_ROOT`: override the WICAP repo path (default: `~/apps/wicap`).
 - `CODEX_HOME`: override Codex artifact root (default: `~/.codex`).
+- `WICAP_ASSIST_OTLP_PROFILE`: telemetry export profile (`disabled`, `self_hosted`, `vendor`, `cloud`).
+- `WICAP_ASSIST_OTLP_HTTP_ENDPOINT`: OTLP HTTP endpoint for control-loop telemetry export.
+- `WICAP_ASSIST_OTLP_HEADERS`: optional OTLP headers (`k=v,k2=v2` or JSON object).
+- `WICAP_ASSIST_OTLP_AUTH_BEARER`: optional bearer token (added as `Authorization` header).
+- `WICAP_ASSIST_OTLP_API_KEY`: optional API key (added as `x-api-key` header).
+- `WICAP_ASSIST_OTLP_TIMEOUT_SECONDS`: OTLP request timeout (default `1.5`).
 
 ## Install
 ```bash
@@ -112,6 +118,8 @@ Data is stored in `./data/assistant.db`.
 - `wicap-assist backfill-report [--min-occurrences N] [--min-span-days X] [--json]`
 - `wicap-assist fix-lineage "<signature>" [--limit N] [--json]`
 - `wicap-assist confidence-audit [--limit N] [--json]`
+- `wicap-assist memory-maintenance [--lookback-days N] [--stale-days N] [--max-decision-rows N] [--max-session-rows N] [--prune-stale] [--output <file>] [--json]`
+- `wicap-assist rollout-gates [--lookback-days N] [--min-shadow-samples N] [--min-shadow-agreement-rate F] [--min-shadow-success-rate F] [--min-reward-avg F] [--max-autonomous-escalation-rate F] [--min-autonomous-runs N] [--max-rollback-failures N] [--json]`
 - `wicap-assist soak-run [--duration-minutes N] [--playwright-interval-minutes N] [--baseline-path <file>] [--baseline-update|--no-baseline-update] [--observe-interval-seconds N] [--control-mode monitor|observe|assist|autonomous] [--control-check-threshold N] [--control-recover-threshold N] [--control-max-recover-attempts N] [--control-action-cooldown-cycles N] [--require-runtime-contract|--no-require-runtime-contract] [--runtime-contract-path <file>] [--stop-on-escalation|--no-stop-on-escalation] [--dry-run]`
 - `wicap-assist live [--interval N] [--once] [--control-mode monitor|observe|assist|autonomous] [--control-check-threshold N] [--control-recover-threshold N] [--control-max-recover-attempts N] [--control-action-cooldown-cycles N] [--stop-on-escalation]`
 - `wicap-assist agent [--control-mode monitor|observe|assist|autonomous] [--observe-interval-seconds N]`

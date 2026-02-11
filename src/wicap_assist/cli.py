@@ -53,9 +53,11 @@ from wicap_assist.cross_pattern import (
 )
 from wicap_assist.incident import load_bundle_json, write_incident_report
 from wicap_assist.live import run_live_monitor
+from wicap_assist.memory_maintenance import run_memory_maintenance, write_memory_maintenance_report
 from wicap_assist.guardian import run_guardian
 from wicap_assist.playbooks import generate_playbooks
 from wicap_assist.recommend import build_recommendation, recommendation_to_json
+from wicap_assist.rollout_gates import evaluate_rollout_gates
 from wicap_assist.runtime_contract import (
     format_runtime_contract_report_text,
     run_runtime_contract_check,
@@ -729,6 +731,41 @@ def build_parser() -> argparse.ArgumentParser:
     audit_parser.add_argument("--limit", type=int, default=100, help="Number of patterns to analyze")
     audit_parser.add_argument("--json", action="store_true", dest="as_json", help="Emit JSON output")
 
+    maintenance_parser = subparsers.add_parser(
+        "memory-maintenance",
+        help="Run deterministic memory maintenance/reflection job",
+    )
+    maintenance_parser.add_argument("--lookback-days", type=int, default=14, help="Decision lookback window")
+    maintenance_parser.add_argument("--stale-days", type=int, default=7, help="Working-memory stale threshold")
+    maintenance_parser.add_argument("--max-decision-rows", type=int, default=5000, help="Decision rows scan cap")
+    maintenance_parser.add_argument("--max-session-rows", type=int, default=500, help="Control session scan cap")
+    maintenance_parser.add_argument(
+        "--prune-stale",
+        action="store_true",
+        help="Clear unresolved/pending working-memory state for stale ended sessions",
+    )
+    maintenance_parser.add_argument(
+        "--output",
+        type=Path,
+        default=Path("data/reports/memory_maintenance_latest.json"),
+        help="Write JSON maintenance report to this path",
+    )
+    maintenance_parser.add_argument("--json", action="store_true", dest="as_json", help="Emit JSON output")
+
+    rollout_parser = subparsers.add_parser(
+        "rollout-gates",
+        help="Evaluate deterministic autonomous rollout/canary promotion gates",
+    )
+    rollout_parser.add_argument("--lookback-days", type=int, default=14, help="Lookback window in days")
+    rollout_parser.add_argument("--min-shadow-samples", type=int, default=20)
+    rollout_parser.add_argument("--min-shadow-agreement-rate", type=float, default=0.70)
+    rollout_parser.add_argument("--min-shadow-success-rate", type=float, default=0.60)
+    rollout_parser.add_argument("--min-reward-avg", type=float, default=0.00)
+    rollout_parser.add_argument("--max-autonomous-escalation-rate", type=float, default=0.20)
+    rollout_parser.add_argument("--min-autonomous-runs", type=int, default=5)
+    rollout_parser.add_argument("--max-rollback-failures", type=int, default=3)
+    rollout_parser.add_argument("--json", action="store_true", dest="as_json", help="Emit JSON output")
+
     soak_run_parser = subparsers.add_parser("soak-run", help="Run supervised WICAP soak and auto-capture context")
     soak_run_parser.add_argument("--duration-minutes", type=int, default=None, help="Soak duration in minutes")
     soak_run_parser.add_argument(
@@ -1075,6 +1112,68 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(confidence_audit_to_json(report))
         else:
             print(format_confidence_audit_text(report))
+        return 0
+
+    if args.command == "memory-maintenance":
+        conn = connect_db(db_path)
+        try:
+            report = run_memory_maintenance(
+                conn,
+                lookback_days=max(1, int(args.lookback_days)),
+                stale_days=max(1, int(args.stale_days)),
+                max_decision_rows=max(1, int(args.max_decision_rows)),
+                max_session_rows=max(1, int(args.max_session_rows)),
+                prune_stale=bool(args.prune_stale),
+            )
+            output_path = write_memory_maintenance_report(report, Path(args.output))
+            conn.commit()
+        finally:
+            conn.close()
+        if args.as_json:
+            import json as _json
+
+            print(_json.dumps(report, sort_keys=True))
+        else:
+            print(
+                "Memory maintenance: "
+                f"decisions={report['decision_rows_analyzed']} "
+                f"stale_sessions={report['stale_session_count']} "
+                f"pruned={report['pruned_session_count']} "
+                f"avg_reward={report['avg_reward']}"
+            )
+            print(f"Report written: {output_path}")
+        return 0
+
+    if args.command == "rollout-gates":
+        conn = connect_db(db_path)
+        try:
+            report = evaluate_rollout_gates(
+                conn,
+                lookback_days=max(1, int(args.lookback_days)),
+                min_shadow_samples=max(1, int(args.min_shadow_samples)),
+                min_shadow_agreement_rate=float(args.min_shadow_agreement_rate),
+                min_shadow_success_rate=float(args.min_shadow_success_rate),
+                min_reward_avg=float(args.min_reward_avg),
+                max_autonomous_escalation_rate=float(args.max_autonomous_escalation_rate),
+                min_autonomous_runs=max(1, int(args.min_autonomous_runs)),
+                max_rollback_failures=max(0, int(args.max_rollback_failures)),
+            )
+        finally:
+            conn.close()
+        if args.as_json:
+            import json as _json
+
+            print(_json.dumps(report, sort_keys=True))
+        else:
+            status = "PASS" if bool(report.get("overall_pass")) else "FAIL"
+            print(f"Rollout gates: {status}")
+            gates = report.get("gates", {})
+            if isinstance(gates, dict):
+                for name in sorted(gates.keys()):
+                    value = gates.get(name, {})
+                    if not isinstance(value, dict):
+                        continue
+                    print(f"- {name}: {value.get('status')} (pass={bool(value.get('pass'))})")
         return 0
 
     if args.command == "soak-run":

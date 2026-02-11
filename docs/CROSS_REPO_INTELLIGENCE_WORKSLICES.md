@@ -1,6 +1,6 @@
 # Cross-Repo Intelligent Agent Integration Plan
 
-Status: In Progress (M0-M3 foundations implemented; M4.1-M4.4 adaptive-learning baselines implemented; M5 baseline telemetry implemented)
+Status: In Progress (M0-M4 foundations implemented; M5.1-M5.3 telemetry baselines implemented; M6/M7 rollout intelligence in progress)
 Owners: WiCAP Core + wicap-assistant
 Canonical chain: `ASSISTANT_MISSION.md` -> `ASSISTANT_ROADMAP.md` -> this file
 
@@ -44,7 +44,10 @@ Canonical chain: `ASSISTANT_MISSION.md` -> `ASSISTANT_ROADMAP.md` -> this file
 - Implemented M5 baseline telemetry:
   - WiCAP optional OTLP collector profile (`profiles: [otel]`) with required processors.
   - Assistant OTLP-aligned telemetry envelopes with redaction hooks and tests.
-- Remaining: M2.4 maintenance tier, M5.3 endpoint/auth profile hardening, M6/M7 rollout intelligence gates.
+- Implemented M7 rollout-gate baseline:
+  - deterministic `rollout-gates` evaluator for shadow quality, reward stability, autonomous escalation rate, and rollback budget.
+  - CLI gate output for canary/promotion readiness checks in CI or scheduled runs.
+- Remaining: M6/M7 rollout intelligence gates and production promotion SLO hardening.
 
 ## 1. Program Goal
 Build a WiCAP-native autonomous control agent with durable memory, adaptive learning, network anomaly intelligence, and secure cloud telemetry without breaking deterministic safety guarantees.
@@ -212,11 +215,11 @@ References are listed in Section 12.
 - Exit criteria:
   - resumed sessions restore unresolved context and pending actions.
 
-### Work Slice M2.4 - Scheduled Reflection Jobs
+### Work Slice M2.4 - Scheduled Reflection Jobs (Implemented Baseline)
 - Goal: periodic memory maintenance (summaries, stale pruning, drift labeling).
 - Assistant files:
-  - `src/wicap_assist/memory_maintenance.py` (new)
-  - `scripts/cron_memory_maintenance.sh` (new)
+  - `src/wicap_assist/memory_maintenance.py`
+  - `scripts/cron_memory_maintenance.sh`
 - Tests:
   - maintenance idempotency and bounded-runtime tests.
 - Exit criteria:
@@ -337,14 +340,15 @@ References are listed in Section 12.
 - Exit criteria:
   - one live cycle creates trace spans + metrics + structured logs.
 
-### Work Slice M5.3 - OTLP Endpoint Profiles + Auth
+### Work Slice M5.3 - OTLP Endpoint Profiles + Auth (Implemented Baseline)
 - Goal: support provider-neutral OTLP endpoints and auth/header profiles (self-hosted, vendor-managed, cloud-native).
 - WiCAP files:
   - `docs/CONFIGURATION.md`
   - `ops/otel/collector-config.yaml`
 - Assistant files:
+  - `src/wicap_assist/otlp_profile.py`
+  - `src/wicap_assist/telemetry.py`
   - `README.md`
-  - `docs/HANDOFF_PLAN.md`
 - Tests:
   - config validation tests for endpoint/auth profile completeness.
 - Exit criteria:

@@ -18,4 +18,10 @@ PYTHONPATH=src python -m wicap_assist.cli --db "${DB_PATH}" soak-run --dry-run -
 echo "[smoke] ingest --scan-harness"
 PYTHONPATH=src python -m wicap_assist.cli --db "${DB_PATH}" ingest --scan-harness
 
+echo "[smoke] memory-maintenance"
+PYTHONPATH=src python -m wicap_assist.cli --db "${DB_PATH}" memory-maintenance --json >/dev/null
+
+echo "[smoke] rollout-gates"
+PYTHONPATH=src python -m wicap_assist.cli --db "${DB_PATH}" rollout-gates --json >/dev/null
+
 echo "[smoke] PASS"

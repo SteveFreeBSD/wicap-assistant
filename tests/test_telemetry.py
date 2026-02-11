@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from wicap_assist.otlp_profile import OtlpProfile
 from wicap_assist.telemetry import (
     TELEMETRY_EVENT_VERSION,
     build_control_cycle_telemetry,
@@ -59,3 +60,76 @@ def test_emit_control_cycle_telemetry_persists_redacted_payload(tmp_path: Path) 
     assert "password=<redacted>" in persisted["logs"][0]["body"]
     assert "Bearer <redacted>" in persisted["logs"][0]["attributes"]["auth"]
     assert payload == persisted
+
+
+def test_emit_control_cycle_telemetry_posts_to_otlp_when_profile_valid(tmp_path: Path) -> None:
+    sink = tmp_path / "telemetry.jsonl"
+    seen: dict[str, object] = {}
+
+    class _Response:
+        status = 200
+
+    def fake_sender(request, timeout):  # type: ignore[no-untyped-def]
+        seen["url"] = request.full_url
+        seen["timeout"] = timeout
+        seen["headers"] = dict(request.header_items())
+        seen["body"] = request.data.decode("utf-8")
+        return _Response()
+
+    profile = OtlpProfile(
+        profile="self_hosted",
+        enabled=True,
+        endpoint="http://localhost:4318/v1/logs",
+        headers={"X-Token": "abc"},
+        timeout_seconds=2.0,
+        errors=[],
+        warnings=[],
+    )
+    emit_control_cycle_telemetry(
+        mode="assist",
+        profile="assist-v1",
+        decision="live_cycle",
+        observation_cycle=1,
+        actions_executed=0,
+        anomaly_events=0,
+        message="ok",
+        sink_path=sink,
+        otlp_profile=profile,
+        otlp_sender=fake_sender,
+    )
+    assert seen["url"] == "http://localhost:4318/v1/logs"
+    assert float(seen["timeout"]) == 2.0
+    lowered_headers = {str(key).lower(): value for key, value in dict(seen["headers"]).items()}
+    assert "content-type" in lowered_headers
+    assert '"telemetry_event_version": "wicap.telemetry.v1"' in str(seen["body"])
+
+
+def test_emit_control_cycle_telemetry_otlp_failure_is_fail_open(tmp_path: Path) -> None:
+    sink = tmp_path / "telemetry.jsonl"
+
+    def failing_sender(_request, timeout):  # type: ignore[no-untyped-def]
+        raise OSError(f"timeout={timeout}")
+
+    profile = OtlpProfile(
+        profile="self_hosted",
+        enabled=True,
+        endpoint="http://localhost:4318/v1/logs",
+        headers={},
+        timeout_seconds=1.5,
+        errors=[],
+        warnings=[],
+    )
+    payload = emit_control_cycle_telemetry(
+        mode="assist",
+        profile="assist-v1",
+        decision="live_cycle",
+        observation_cycle=1,
+        actions_executed=0,
+        anomaly_events=0,
+        message="ok",
+        sink_path=sink,
+        otlp_profile=profile,
+        otlp_sender=failing_sender,
+    )
+    assert payload["telemetry_event_version"] == TELEMETRY_EVENT_VERSION
+    assert sink.exists()

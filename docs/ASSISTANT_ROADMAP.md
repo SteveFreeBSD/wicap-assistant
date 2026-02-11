@@ -64,6 +64,7 @@
 - Implemented shadow-only action ranking baseline for allowlisted actions with auditable score traces.
 - Implemented deterministic reward modeling + outcome labels for decision feature persistence.
 - Implemented shadow quality gate metrics (sample/agreement/success thresholds) with telemetry emission in live/soak loops.
+- Implemented scheduled memory-maintenance job baseline with stale working-memory pruning and reflection reports.
 - Remaining: guarded promotion policy for any future learned-action execution changes.
 
 ## Phase 11 – WiCAP-Native Network Intelligence (In Progress)
@@ -79,6 +80,7 @@
 - Implemented telemetry redaction hooks and regression tests for secret/token masking.
 - Implemented optional WiCAP OpenTelemetry Collector compose profile baseline.
 - Implemented WiCAP fail-open OTLP exporter queueing/backoff so telemetry delivery never destabilizes capture/control paths.
+- Implemented assistant OTLP endpoint/auth profile validation and fail-open HTTP export hooks.
 
 ## Active Program Plan
 - Detailed cross-repo milestones and work slices live in:
