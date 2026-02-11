@@ -713,6 +713,9 @@ def run_live_monitor(
                     if not isinstance(item, dict):
                         continue
                     anomaly_events += int(item.get("count", 0) or 0)
+            shadow_gate_payload = shadow_ranker.get("shadow_gate", {}) if isinstance(shadow_ranker, dict) else {}
+            if not isinstance(shadow_gate_payload, dict):
+                shadow_gate_payload = {}
             try:
                 emit_control_cycle_telemetry(
                     mode=str(control_mode),
@@ -725,6 +728,10 @@ def run_live_monitor(
                     attributes={
                         "source": "live_monitor",
                         "guardian_alert_count": int(len(alerts)),
+                        "shadow_gate_samples": int(shadow_gate_payload.get("samples", 0) or 0),
+                        "shadow_gate_passes": bool(shadow_gate_payload.get("passes", False)),
+                        "shadow_gate_agreement_rate": float(shadow_gate_payload.get("agreement_rate", 0.0) or 0.0),
+                        "shadow_gate_success_rate": float(shadow_gate_payload.get("success_rate", 0.0) or 0.0),
                     },
                 )
             except Exception:

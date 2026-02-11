@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+import json
+import os
 import sqlite3
 from typing import Any, Mapping
 
 from wicap_assist.actuators import ALLOWED_RESTART_SERVICES
 
 _BASE_ACTIONS = ("status_check", "compose_up", "shutdown")
+_DEFAULT_SHADOW_GATE_WINDOW = 500
+_DEFAULT_SHADOW_GATE_MIN_SAMPLES = 20
+_DEFAULT_SHADOW_GATE_MIN_AGREEMENT = 0.7
+_DEFAULT_SHADOW_GATE_MIN_SUCCESS = 0.6
 
 
 def _extract_down_services(observation: Mapping[str, Any]) -> list[str]:
@@ -96,6 +102,95 @@ def _context_boost(action: str, *, down_services: list[str], mode: str) -> float
     return 0.0
 
 
+def _shadow_gate_thresholds() -> tuple[int, int, float, float]:
+    window = _DEFAULT_SHADOW_GATE_WINDOW
+    min_samples = _DEFAULT_SHADOW_GATE_MIN_SAMPLES
+    min_agreement = _DEFAULT_SHADOW_GATE_MIN_AGREEMENT
+    min_success = _DEFAULT_SHADOW_GATE_MIN_SUCCESS
+    try:
+        window = max(50, int(os.getenv("WICAP_ASSIST_SHADOW_GATE_WINDOW", str(window))))
+    except ValueError:
+        pass
+    try:
+        min_samples = max(1, int(os.getenv("WICAP_ASSIST_SHADOW_GATE_MIN_SAMPLES", str(min_samples))))
+    except ValueError:
+        pass
+    try:
+        min_agreement = min(1.0, max(0.0, float(os.getenv("WICAP_ASSIST_SHADOW_GATE_MIN_AGREEMENT", str(min_agreement)))))
+    except ValueError:
+        pass
+    try:
+        min_success = min(1.0, max(0.0, float(os.getenv("WICAP_ASSIST_SHADOW_GATE_MIN_SUCCESS", str(min_success)))))
+    except ValueError:
+        pass
+    return window, min_samples, min_agreement, min_success
+
+
+def _shadow_quality_gate(conn: sqlite3.Connection) -> dict[str, Any]:
+    (
+        sample_window,
+        min_samples,
+        min_agreement_rate,
+        min_success_rate,
+    ) = _shadow_gate_thresholds()
+    rows = conn.execute(
+        """
+        SELECT action, status, feature_json
+        FROM decision_features
+        WHERE feature_json LIKE '%shadow_ranker_top_action%'
+        ORDER BY id DESC
+        LIMIT ?
+        """,
+        (int(sample_window),),
+    ).fetchall()
+    samples = 0
+    agreement_count = 0
+    success_count = 0
+    for row in rows:
+        action = str(row["action"] or "").strip()
+        if not action:
+            continue
+        raw_feature = row["feature_json"]
+        if not isinstance(raw_feature, str):
+            continue
+        try:
+            feature = json.loads(raw_feature)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(feature, dict):
+            continue
+        shadow_action = str(feature.get("shadow_ranker_top_action") or "").strip()
+        if not shadow_action:
+            continue
+        samples += 1
+        if shadow_action == action:
+            agreement_count += 1
+            if str(row["status"] or "").strip().lower() == "executed_ok":
+                success_count += 1
+
+    agreement_rate = float(agreement_count) / float(samples) if samples > 0 else 0.0
+    success_rate = float(success_count) / float(agreement_count) if agreement_count > 0 else 0.0
+    passes = (
+        samples >= int(min_samples)
+        and agreement_rate >= float(min_agreement_rate)
+        and success_rate >= float(min_success_rate)
+    )
+    status = "pass" if passes else "insufficient_data" if samples < int(min_samples) else "fail"
+    return {
+        "enabled": True,
+        "status": status,
+        "samples": int(samples),
+        "agreement_count": int(agreement_count),
+        "success_count": int(success_count),
+        "agreement_rate": round(float(agreement_rate), 4),
+        "success_rate": round(float(success_rate), 4),
+        "min_samples": int(min_samples),
+        "min_agreement_rate": round(float(min_agreement_rate), 4),
+        "min_success_rate": round(float(min_success_rate), 4),
+        "passes": bool(passes),
+    }
+
+
 def rank_allowlisted_actions(
     conn: sqlite3.Connection,
     *,
@@ -131,6 +226,7 @@ def rank_allowlisted_actions(
 
     rankings.sort(key=lambda item: (-float(item["score"]), str(item["action"])))
     top = rankings[: max(1, int(top_n))]
+    shadow_gate = _shadow_quality_gate(conn)
     return {
         "mode": str(mode),
         "policy_profile": str(policy_profile),
@@ -138,5 +234,5 @@ def rank_allowlisted_actions(
         "top_action": str(top[0]["action"]) if top else None,
         "top_score": float(top[0]["score"]) if top else 0.0,
         "rankings": top,
+        "shadow_gate": shadow_gate,
     }
-

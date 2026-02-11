@@ -62,7 +62,9 @@
 - Implemented additive decision feature store persistence (`decision_features`) for deterministic per-decision learning vectors.
 - Implemented working-memory context cache for active sessions and resumable live handoffs.
 - Implemented shadow-only action ranking baseline for allowlisted actions with auditable score traces.
-- Remaining: guarded promotion/ranking quality gates before any learned-action execution changes.
+- Implemented deterministic reward modeling + outcome labels for decision feature persistence.
+- Implemented shadow quality gate metrics (sample/agreement/success thresholds) with telemetry emission in live/soak loops.
+- Remaining: guarded promotion policy for any future learned-action execution changes.
 
 ## Phase 11 – WiCAP-Native Network Intelligence (In Progress)
 - Implemented ingest adapter for WiCAP-native network envelopes and integrated network categories into recommendation/playbook/rollup/guardian evidence paths.
@@ -76,7 +78,7 @@
 - Implemented provider-neutral OTLP-aligned traces/metrics/log payload emission for live and supervised soak control cycles.
 - Implemented telemetry redaction hooks and regression tests for secret/token masking.
 - Implemented optional WiCAP OpenTelemetry Collector compose profile baseline.
-- Add backpressure/failure handling so telemetry delivery never destabilizes control.
+- Implemented WiCAP fail-open OTLP exporter queueing/backoff so telemetry delivery never destabilizes capture/control paths.
 
 ## Active Program Plan
 - Detailed cross-repo milestones and work slices live in:

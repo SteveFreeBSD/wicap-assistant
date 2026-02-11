@@ -563,6 +563,8 @@ def test_soak_run_managed_observe_collects_live_metrics(tmp_path: Path) -> None:
     ).fetchone()
     assert feature_row is not None
     assert "shadow_ranker_top_action" in str(feature_row["feature_json"])
+    assert "shadow_gate_samples" in str(feature_row["feature_json"])
+    assert "reward_value" in str(feature_row["feature_json"])
     session_row = conn.execute(
         "SELECT metadata_json FROM control_sessions WHERE id = ?",
         (summary["control_session_id"],),

@@ -355,6 +355,10 @@ def test_live_assist_mode_records_control_events(tmp_path: Path, monkeypatch) ->
     feature_payload = json.loads(str(feature_row["feature_json"]))
     assert "shadow_ranker_top_action" in feature_payload
     assert "shadow_ranker_agrees" in feature_payload
+    assert "shadow_gate_samples" in feature_payload
+    assert "shadow_gate_passes" in feature_payload
+    assert "reward_value" in feature_payload
+    assert "reward_label" in feature_payload
     metadata_row = conn.execute(
         "SELECT metadata_json FROM control_sessions ORDER BY id DESC LIMIT 1"
     ).fetchone()

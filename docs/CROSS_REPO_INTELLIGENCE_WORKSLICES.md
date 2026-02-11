@@ -1,6 +1,6 @@
 # Cross-Repo Intelligent Agent Integration Plan
 
-Status: In Progress (M0-M3 foundations implemented; M2.2 and M4.1 learning baselines implemented; M5 baseline telemetry implemented)
+Status: In Progress (M0-M3 foundations implemented; M4.1-M4.4 adaptive-learning baselines implemented; M5 baseline telemetry implemented)
 Owners: WiCAP Core + wicap-assistant
 Canonical chain: `ASSISTANT_MISSION.md` -> `ASSISTANT_ROADMAP.md` -> this file
 
@@ -29,6 +29,12 @@ Canonical chain: `ASSISTANT_MISSION.md` -> `ASSISTANT_ROADMAP.md` -> this file
 - Implemented M4.2 shadow action ranking baseline:
   - Assistant shadow ranker scores allowlisted actions from context + historical success rates.
   - Ranking output is persisted in decision features and remains non-executing (shadow only).
+- Implemented M4.3 reward modeling baseline:
+  - Deterministic reward model computes outcome/durability/TTR/recurrence/verification components.
+  - Decision feature vectors now persist reward value, label, and component traces.
+- Implemented M4.4 shadow quality gate baseline:
+  - Shadow ranker now emits gate metrics (samples, agreement rate, success rate, pass/fail).
+  - Gate telemetry fields are emitted in live/soak cycles while execution remains policy-gated.
 - Implemented WiCAP anomaly output contract baseline for M6/W3 bridge:
   - WiCAP anomaly envelope contract `wicap.anomaly.v1` and runtime append path from stream scoring.
   - Assistant ingest adapter now scans `captures/wicap_anomaly_events.jsonl`.
@@ -38,7 +44,7 @@ Canonical chain: `ASSISTANT_MISSION.md` -> `ASSISTANT_ROADMAP.md` -> this file
 - Implemented M5 baseline telemetry:
   - WiCAP optional OTLP collector profile (`profiles: [otel]`) with required processors.
   - Assistant OTLP-aligned telemetry envelopes with redaction hooks and tests.
-- Remaining: M2.4 maintenance tier, M4.3+ adaptive ranking gates, M5.3+ endpoint/auth/resilience hardening, M6/M7 rollout intelligence gates.
+- Remaining: M2.4 maintenance tier, M5.3 endpoint/auth profile hardening, M6/M7 rollout intelligence gates.
 
 ## 1. Program Goal
 Build a WiCAP-native autonomous control agent with durable memory, adaptive learning, network anomaly intelligence, and secure cloud telemetry without breaking deterministic safety guarantees.
@@ -281,21 +287,25 @@ References are listed in Section 12.
 - Exit criteria:
   - ranker suggests only allowlisted actions and logs rationale.
 
-### Work Slice M4.3 - Reward Model + Outcome Labeling
+### Work Slice M4.3 - Reward Model + Outcome Labeling (Implemented Baseline)
 - Goal: compute reward from durability, TTR, recurrence, and verification outcomes.
 - Assistant files:
   - `src/wicap_assist/reward_model.py` (new)
-  - `src/wicap_assist/recommend_confidence.py`
+  - `src/wicap_assist/decision_features.py`
+  - `src/wicap_assist/live.py`
+  - `src/wicap_assist/soak_run.py`
 - Tests:
   - reward correctness tests across pass/fail/relapse scenarios.
 - Exit criteria:
   - reward calculation is deterministic and traceable.
 
-### Work Slice M4.4 - Shadow Mode Learning Gate
+### Work Slice M4.4 - Shadow Mode Learning Gate (Implemented Baseline)
 - Goal: run learned ranking in shadow mode before live control use.
 - Assistant files:
+  - `src/wicap_assist/action_ranker.py`
+  - `src/wicap_assist/decision_features.py`
   - `src/wicap_assist/live.py`
-  - `src/wicap_assist/cli.py`
+  - `src/wicap_assist/soak_run.py`
 - Tests:
   - shadow-vs-executed comparison tests.
 - Exit criteria:

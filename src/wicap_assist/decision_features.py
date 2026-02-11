@@ -5,6 +5,8 @@ from __future__ import annotations
 import sqlite3
 from typing import Any, Mapping
 
+from wicap_assist.reward_model import compute_reward_signal
+
 
 _SUCCESS_STATUSES = {"executed_ok"}
 _FAIL_STATUSES = {"executed_fail", "rejected", "missing_script"}
@@ -63,6 +65,13 @@ def _event_dict(value: object) -> dict[str, Any]:
     return {}
 
 
+def _safe_float(value: object, *, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float(default)
+
+
 def _count_top_signatures(pre_state: Mapping[str, Any]) -> tuple[int, int]:
     top = pre_state.get("top_signatures")
     if not isinstance(top, list):
@@ -100,6 +109,7 @@ def build_decision_feature_vector(
     mode: str,
     policy_profile: str,
     prior_stats: Mapping[str, Any] | None = None,
+    reward_signal: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a deterministic decision feature vector from one control event."""
     pre_state = _event_dict(event.get("pre_state_json"))
@@ -139,6 +149,40 @@ def build_decision_feature_vector(
         rankings = shadow_ranker.get("rankings")
         if isinstance(rankings, list):
             shadow_candidate_count = len(rankings)
+    shadow_gate_samples = 0
+    shadow_gate_agreement_rate = 0.0
+    shadow_gate_success_rate = 0.0
+    shadow_gate_passes = False
+    if isinstance(shadow_ranker, dict):
+        shadow_gate = shadow_ranker.get("shadow_gate")
+        if isinstance(shadow_gate, dict):
+            try:
+                shadow_gate_samples = int(shadow_gate.get("samples", 0) or 0)
+            except (TypeError, ValueError):
+                shadow_gate_samples = 0
+            try:
+                shadow_gate_agreement_rate = float(shadow_gate.get("agreement_rate", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                shadow_gate_agreement_rate = 0.0
+            try:
+                shadow_gate_success_rate = float(shadow_gate.get("success_rate", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                shadow_gate_success_rate = 0.0
+            shadow_gate_passes = bool(shadow_gate.get("passes"))
+
+    reward = dict(reward_signal or compute_reward_signal(event=event, prior_stats=prior))
+    reward_value = 0.0
+    reward_label = "neutral"
+    reward_components = reward.get("components")
+    if not isinstance(reward_components, dict):
+        reward_components = {}
+    try:
+        reward_value = float(reward.get("reward", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        reward_value = 0.0
+    label_value = reward.get("label")
+    if isinstance(label_value, str) and label_value.strip():
+        reward_label = label_value.strip()
 
     return {
         "mode": str(mode).strip(),
@@ -163,4 +207,15 @@ def build_decision_feature_vector(
         "shadow_ranker_top_score": round(shadow_top_score, 4),
         "shadow_ranker_candidate_count": int(shadow_candidate_count),
         "shadow_ranker_agrees": bool(shadow_top_action and action and shadow_top_action == action),
+        "shadow_gate_samples": int(shadow_gate_samples),
+        "shadow_gate_agreement_rate": round(float(shadow_gate_agreement_rate), 4),
+        "shadow_gate_success_rate": round(float(shadow_gate_success_rate), 4),
+        "shadow_gate_passes": bool(shadow_gate_passes),
+        "reward_value": round(float(reward_value), 4),
+        "reward_label": str(reward_label),
+        "reward_component_outcome": round(_safe_float(reward_components.get("outcome", 0.0)), 4),
+        "reward_component_durability": round(_safe_float(reward_components.get("durability", 0.0)), 4),
+        "reward_component_ttr": round(_safe_float(reward_components.get("ttr", 0.0)), 4),
+        "reward_component_recurrence": round(_safe_float(reward_components.get("recurrence", 0.0)), 4),
+        "reward_component_verification": round(_safe_float(reward_components.get("verification", 0.0)), 4),
     }

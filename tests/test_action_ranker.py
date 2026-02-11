@@ -67,3 +67,56 @@ def test_rank_allowlisted_actions_prefers_historical_restart_on_down_service(tmp
     finally:
         conn.close()
 
+
+def test_rank_allowlisted_actions_reports_shadow_gate_metrics(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    conn = connect_db(tmp_path / "assistant.db")
+    try:
+        monkeypatch.setenv("WICAP_ASSIST_SHADOW_GATE_MIN_SAMPLES", "2")
+        monkeypatch.setenv("WICAP_ASSIST_SHADOW_GATE_MIN_AGREEMENT", "0.5")
+        monkeypatch.setenv("WICAP_ASSIST_SHADOW_GATE_MIN_SUCCESS", "0.5")
+
+        insert_decision_feature(
+            conn,
+            control_session_id=None,
+            soak_run_id=None,
+            episode_id=None,
+            ts="2026-02-11T00:00:00+00:00",
+            mode="assist",
+            policy_profile="supervised-v1",
+            decision="threshold_recover",
+            action="restart_service:wicap-redis",
+            status="executed_ok",
+            feature_json={"shadow_ranker_top_action": "restart_service:wicap-redis"},
+        )
+        insert_decision_feature(
+            conn,
+            control_session_id=None,
+            soak_run_id=None,
+            episode_id=None,
+            ts="2026-02-11T00:00:01+00:00",
+            mode="assist",
+            policy_profile="supervised-v1",
+            decision="threshold_recover",
+            action="status_check",
+            status="executed_fail",
+            feature_json={"shadow_ranker_top_action": "status_check"},
+        )
+        conn.commit()
+
+        ranked = rank_allowlisted_actions(
+            conn,
+            observation=_observation_with_down_redis(),
+            mode="assist",
+            policy_profile="supervised-v1",
+            top_n=3,
+        )
+        shadow_gate = ranked["shadow_gate"]
+        assert int(shadow_gate["samples"]) >= 2
+        assert float(shadow_gate["agreement_rate"]) >= 0.5
+        assert float(shadow_gate["success_rate"]) >= 0.5
+        assert bool(shadow_gate["passes"]) is True
+    finally:
+        conn.close()

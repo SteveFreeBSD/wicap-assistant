@@ -760,6 +760,9 @@ def run_supervised_soak(
                             if not isinstance(item, dict):
                                 continue
                             anomaly_events += int(item.get("count", 0) or 0)
+                    shadow_gate_payload = shadow_ranker.get("shadow_gate", {}) if isinstance(shadow_ranker, dict) else {}
+                    if not isinstance(shadow_gate_payload, dict):
+                        shadow_gate_payload = {}
                     try:
                         emit_control_cycle_telemetry(
                             mode=str(control_mode),
@@ -772,6 +775,14 @@ def run_supervised_soak(
                             attributes={
                                 "source": "soak_run",
                                 "managed_observe": bool(managed_observe),
+                                "shadow_gate_samples": int(shadow_gate_payload.get("samples", 0) or 0),
+                                "shadow_gate_passes": bool(shadow_gate_payload.get("passes", False)),
+                                "shadow_gate_agreement_rate": float(
+                                    shadow_gate_payload.get("agreement_rate", 0.0) or 0.0
+                                ),
+                                "shadow_gate_success_rate": float(
+                                    shadow_gate_payload.get("success_rate", 0.0) or 0.0
+                                ),
                             },
                         )
                     except Exception:
@@ -969,6 +980,9 @@ def run_supervised_soak(
                     if not isinstance(item, dict):
                         continue
                     anomaly_events += int(item.get("count", 0) or 0)
+            shadow_gate_payload = shadow_ranker.get("shadow_gate", {}) if isinstance(shadow_ranker, dict) else {}
+            if not isinstance(shadow_gate_payload, dict):
+                shadow_gate_payload = {}
             try:
                 emit_control_cycle_telemetry(
                     mode=str(control_mode),
@@ -981,6 +995,10 @@ def run_supervised_soak(
                     attributes={
                         "source": "soak_run",
                         "final_cycle": True,
+                        "shadow_gate_samples": int(shadow_gate_payload.get("samples", 0) or 0),
+                        "shadow_gate_passes": bool(shadow_gate_payload.get("passes", False)),
+                        "shadow_gate_agreement_rate": float(shadow_gate_payload.get("agreement_rate", 0.0) or 0.0),
+                        "shadow_gate_success_rate": float(shadow_gate_payload.get("success_rate", 0.0) or 0.0),
                     },
                 )
             except Exception:
