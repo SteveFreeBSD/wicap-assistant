@@ -18,6 +18,7 @@ build/
 data/*.db
 data/*.sqlite
 data/*.sqlite3
+data/reports/
 data/soak_runs/
 
 # OS/editor

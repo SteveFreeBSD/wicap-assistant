@@ -70,6 +70,8 @@ from wicap_assist.runtime_contract import (
 )
 from wicap_assist.rollup import format_rollup_text, generate_rollup, rollup_to_json
 from wicap_assist.soak_run import run_supervised_soak
+from wicap_assist.settings import wicap_repo_root
+from wicap_assist.wicap_env_setup import SetupAbortedError, run_wicap_env_setup
 from wicap_assist.util.time import utc_now_iso
 
 
@@ -647,6 +649,28 @@ def build_parser() -> argparse.ArgumentParser:
     ingest_parser.add_argument("--scan-antigravity", action="store_true", help="Scan Antigravity conversation artifacts")
     ingest_parser.add_argument("--scan-changelog", action="store_true", help="Scan WICAP CHANGELOG.md")
 
+    setup_env_parser = subparsers.add_parser(
+        "setup-wicap-env",
+        help="Interactive WiCAP .env bootstrap for fresh systems",
+    )
+    setup_env_parser.add_argument(
+        "--repo-root",
+        type=Path,
+        default=None,
+        help="Override WiCAP repo root (default: WICAP_REPO_ROOT or ~/apps/wicap)",
+    )
+    setup_env_parser.add_argument(
+        "--env-file",
+        type=Path,
+        default=None,
+        help="Override target .env path (default: <repo-root>/.env)",
+    )
+    setup_env_parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="Skip final confirmation prompt and write immediately",
+    )
+
     triage_parser = subparsers.add_parser("triage", help="Search stored signals")
     triage_parser.add_argument("query", help="Search phrase")
     triage_parser.add_argument("--top-sessions", type=int, default=5)
@@ -945,6 +969,29 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     db_path = Path(args.db)
+    if args.command == "setup-wicap-env":
+        try:
+            report = run_wicap_env_setup(
+                repo_root=args.repo_root or wicap_repo_root(),
+                env_path=args.env_file,
+                assume_yes=bool(args.yes),
+            )
+        except SetupAbortedError as exc:
+            print(str(exc))
+            return 2
+        except (EOFError, KeyboardInterrupt):
+            print("setup-wicap-env aborted.")
+            return 2
+        except ValueError as exc:
+            print(f"setup-wicap-env error: {exc}")
+            return 2
+        print(
+            "WiCAP env setup complete: "
+            f"path={report['env_path']} "
+            f"changed_keys={len(report.get('changed_keys', []))}"
+        )
+        return 0
+
     if args.command == "ingest":
         scan_flags = [
             args.scan_codex, args.scan_soaks, args.scan_harness,

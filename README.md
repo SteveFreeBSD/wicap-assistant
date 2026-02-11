@@ -47,11 +47,15 @@ Notes:
 - `wicap-assist-control` and interactive `wicap-assist` mount `/var/run/docker.sock` for allowlisted control actions.
 
 ## Canonical Workflow
-1. Validate runtime contract gate (recommended before startup/deploy/soak promotion)
+1. Bootstrap WiCAP `.env` on fresh systems
+```bash
+wicap-assist setup-wicap-env
+```
+2. Validate runtime contract gate (recommended before startup/deploy/soak promotion)
 ```bash
 wicap-assist contract-check --enforce
 ```
-2. Run supervised soak (optional one-command orchestration)
+3. Run supervised soak (optional one-command orchestration)
 ```bash
 wicap-assist soak-run --duration-minutes 10 --playwright-interval-minutes 2 --baseline-path /tmp/baseline.json --baseline-update
 ```
@@ -69,29 +73,29 @@ Autonomous kill-switches: `WICAP_ASSIST_AUTONOMOUS_KILL_SWITCH=1` or sentinel fi
 `soak-run` and `live` both include operator guidance lines (what to check next) during monitoring output.
 `soak-run` persists control session state/events (`control_sessions`, `control_session_events`) for audit and resume safety.
 `soak-run` performs an explicit post-run cleanup actuator pass (`shutdown`) in assist mode and records cleanup status.
-3. Ingest evidence
+4. Ingest evidence
 ```bash
 wicap-assist ingest --scan-codex --scan-soaks --scan-harness --scan-antigravity --scan-changelog
 ```
-4. Analyze recurrence and trends
+5. Analyze recurrence and trends
 ```bash
 wicap-assist cross-patterns
 wicap-assist daily-report --days 3 --top 10
 wicap-assist rollup --days 30 --top 10
 ```
-5. Generate operational artifacts
+6. Generate operational artifacts
 ```bash
 wicap-assist bundle <target>
 wicap-assist incident <target>
 wicap-assist playbooks --top 5
 ```
-6. Run deterministic recommendations and audits
+7. Run deterministic recommendations and audits
 ```bash
 wicap-assist recommend <target-or-signature>
 wicap-assist fix-lineage "<signature>"
 wicap-assist confidence-audit --limit 100
 ```
-7. Monitor live soak/runtime status
+8. Monitor live soak/runtime status
 ```bash
 wicap-assist guardian
 wicap-assist live --interval 10 --once
@@ -103,7 +107,8 @@ Guardian default monitoring covers soak, verification, and runtime logs under `<
 Data is stored in `./data/assistant.db`.
 
 ## Command Reference
-- `wicap-assist ingest [--scan-codex] [--scan-soaks] [--scan-harness] [--scan-antigravity] [--scan-changelog]`
+- `wicap-assist ingest [--scan-codex] [--scan-soaks] [--scan-harness] [--scan-network-events] [--scan-antigravity] [--scan-changelog]`
+- `wicap-assist setup-wicap-env [--repo-root <path>] [--env-file <file>] [--yes]`
 - `wicap-assist triage "<query>"`
 - `wicap-assist bundle <target> [--json]`
 - `wicap-assist incident <target> [--json-input <file>] [--overwrite]`
@@ -115,8 +120,8 @@ Data is stored in `./data/assistant.db`.
 - `wicap-assist changelog-stats`
 - `wicap-assist contract-check [--contract-path <file>] [--json] [--enforce|--no-enforce]`
 - `wicap-assist cross-patterns [--min-occurrences N] [--min-span-days X] [--top N] [--json]`
-- `wicap-assist backfill-report [--min-occurrences N] [--min-span-days X] [--json]`
-- `wicap-assist fix-lineage "<signature>" [--limit N] [--json]`
+- `wicap-assist backfill-report [--json]`
+- `wicap-assist fix-lineage "<signature>" [--json]`
 - `wicap-assist confidence-audit [--limit N] [--json]`
 - `wicap-assist memory-maintenance [--lookback-days N] [--stale-days N] [--max-decision-rows N] [--max-session-rows N] [--prune-stale] [--output <file>] [--json]`
 - `wicap-assist rollout-gates [--lookback-days N] [--min-shadow-samples N] [--min-shadow-agreement-rate F] [--min-shadow-success-rate F] [--min-reward-avg F] [--max-autonomous-escalation-rate F] [--min-autonomous-runs N] [--max-rollback-failures N] [--history-file <file>] [--required-consecutive-passes N] [--enforce] [--json]`
