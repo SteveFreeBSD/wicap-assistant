@@ -7,7 +7,8 @@ services:
       - WICAP_REPO_ROOT=/wicap
     volumes:
       - ./data:/app/data
-      - /home/steve/apps/wicap:/wicap:ro
+      # Host WiCAP repo path. Defaults to a sibling checkout at ../wicap for portable rollouts.
+      - ${WICAP_HOST_REPO_ROOT:-../wicap}:/wicap:ro
     command: ["live", "--interval", "10", "--control-mode", "observe"]
     restart: unless-stopped
 
@@ -19,7 +20,7 @@ services:
       - WICAP_REPO_ROOT=/wicap
     volumes:
       - ./data:/app/data
-      - /home/steve/apps/wicap:/wicap
+      - ${WICAP_HOST_REPO_ROOT:-../wicap}:/wicap
       - /var/run/docker.sock:/var/run/docker.sock
     command:
       [
@@ -43,7 +44,7 @@ services:
       - WICAP_REPO_ROOT=/wicap
     volumes:
       - ./data:/app/data
-      - /home/steve/apps/wicap:/wicap
+      - ${WICAP_HOST_REPO_ROOT:-../wicap}:/wicap
       - /var/run/docker.sock:/var/run/docker.sock
     stdin_open: true
     tty: true

@@ -117,12 +117,11 @@ The console supports prompts like `status`, `start soak for 10 minutes assist`, 
 ## Docker Sidecar (Optional)
 Build/run with compose:
 ```bash
-docker compose -f compose.assistant.yml build
-docker compose -f compose.assistant.yml --profile observe up -d wicap-assist-live
+docker compose -f compose.assistant.yml --profile observe up -d --build wicap-assist-live
 ```
 Run always-on control mode service:
 ```bash
-docker compose -f compose.assistant.yml --profile control up -d wicap-assist-control
+docker compose -f compose.assistant.yml --profile control up -d --build wicap-assist-control
 ```
 Run ad-hoc assistant commands inside the container:
 ```bash
@@ -131,6 +130,7 @@ docker compose -f compose.assistant.yml --profile control run --rm -it wicap-ass
 ```
 Notes:
 - The compose file mounts the WiCAP repo at `/wicap` and sets `WICAP_REPO_ROOT=/wicap`.
+- By default it expects WiCAP checked out next to this repo (`../wicap`). Override with `WICAP_HOST_REPO_ROOT=/opt/wicap`.
 - `wicap-assist-live` is monitor-only (`--control-mode observe`) and does not mount `/var/run/docker.sock`.
 - `wicap-assist-control` is the live control loop (`--control-mode assist`) using allowlisted recovery actions.
 - `wicap-assist-control` and interactive `wicap-assist` mount `/var/run/docker.sock` for allowlisted control actions.
