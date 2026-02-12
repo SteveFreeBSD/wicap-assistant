@@ -4,6 +4,7 @@ from pathlib import Path
 
 from wicap_assist.cli import main
 from wicap_assist.runtime_contract import (
+    evaluate_runtime_contract_report,
     evaluate_runtime_contract,
     run_runtime_contract_check,
 )
@@ -72,6 +73,24 @@ def test_evaluate_runtime_contract_fails_when_service_down() -> None:
     assert int(evaluated["failures"]) == 1
 
 
+def test_evaluate_runtime_contract_report_allows_scout_down_when_configured() -> None:
+    report = {
+        "status": "fail",
+        "checks": [
+            {
+                "kind": "service_state",
+                "name": "wicap-scout",
+                "severity": "fail",
+                "ok": False,
+                "critical": True,
+            }
+        ],
+    }
+    ok, detail = evaluate_runtime_contract_report(report, require_scout=False)
+    assert ok is True
+    assert detail["reason"] == "only_wicap_scout_failed"
+
+
 def test_cli_contract_check_enforce_returns_nonzero(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(
         "wicap_assist.cli.run_runtime_contract_check",
@@ -91,6 +110,32 @@ def test_cli_contract_check_enforce_returns_nonzero(monkeypatch, tmp_path: Path)
 
     rc_no_enforce = main(["contract-check", "--no-enforce"])
     assert rc_no_enforce == 0
+
+
+def test_cli_contract_check_allow_scout_down_passes(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(
+        "wicap_assist.cli.run_runtime_contract_check",
+        lambda **kwargs: {
+            "status": "fail",
+            "contract_name": "wicap-default-runtime",
+            "contract_version": "1.0.0",
+            "contract_path": str(tmp_path / "runtime-contract.v1.json"),
+            "failures": 1,
+            "warnings": 0,
+            "checks": [
+                {
+                    "kind": "service_state",
+                    "name": "wicap-scout",
+                    "severity": "fail",
+                    "ok": False,
+                    "critical": True,
+                }
+            ],
+        },
+    )
+
+    rc = main(["contract-check", "--enforce", "--allow-scout-down"])
+    assert rc == 0
 
 
 def test_cli_soak_run_blocks_when_runtime_contract_fails(monkeypatch, tmp_path: Path) -> None:
@@ -128,4 +173,3 @@ def test_cli_soak_run_blocks_when_runtime_contract_fails(monkeypatch, tmp_path: 
     )
     assert rc == 2
     assert called["soak"] is False
-

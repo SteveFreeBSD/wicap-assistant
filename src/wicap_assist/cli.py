@@ -85,6 +85,7 @@ from wicap_assist.rollout_gates import (
     load_rollout_gate_history,
 )
 from wicap_assist.runtime_contract import (
+    evaluate_runtime_contract_report,
     format_runtime_contract_report_text,
     run_runtime_contract_check,
     runtime_contract_report_to_json,
@@ -339,13 +340,24 @@ def _run_contract_check(
     contract_path: Path | None,
     as_json: bool,
     enforce: bool,
+    require_scout: bool,
 ) -> int:
-    report = run_runtime_contract_check(contract_path=contract_path)
+    raw_report = run_runtime_contract_check(contract_path=contract_path)
+    effective_ok, eval_detail = evaluate_runtime_contract_report(
+        raw_report,
+        require_scout=bool(require_scout),
+    )
+    report = dict(raw_report)
+    report["raw_status"] = str(raw_report.get("status"))
+    report["runtime_contract_require_scout"] = bool(require_scout)
+    report["runtime_contract_eval"] = eval_detail
+    if effective_ok:
+        report["status"] = "pass"
     if as_json:
         print(runtime_contract_report_to_json(report))
     else:
         print(format_runtime_contract_report_text(report))
-    if enforce and str(report.get("status")) != "pass":
+    if enforce and not bool(effective_ok):
         return 2
     return 0
 
@@ -972,6 +984,19 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Override runtime contract JSON path (default: <WICAP_REPO_ROOT>/ops/runtime-contract.v1.json)",
     )
+    contract_parser.add_argument(
+        "--require-scout",
+        dest="require_scout",
+        action="store_true",
+        help="Treat wicap-scout as required in runtime contract evaluation (default)",
+    )
+    contract_parser.add_argument(
+        "--allow-scout-down",
+        dest="require_scout",
+        action="store_false",
+        help="Allow runtime contract pass when only wicap-scout is down",
+    )
+    contract_parser.set_defaults(require_scout=True)
     contract_parser.add_argument("--json", action="store_true", dest="as_json", help="Emit JSON output")
     contract_gate_group = contract_parser.add_mutually_exclusive_group()
     contract_gate_group.add_argument(
@@ -1680,6 +1705,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             contract_path=args.contract_path,
             as_json=bool(args.as_json),
             enforce=bool(args.enforce),
+            require_scout=bool(args.require_scout),
         )
 
     if args.command == "cross-patterns":

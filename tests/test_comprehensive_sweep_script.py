@@ -35,6 +35,7 @@ def test_comprehensive_sweep_wires_expected_substeps() -> None:
     assert "autopilot_quiesce" in content
     assert "--gate-history-file" in content
     assert "--history-file" in content
+    assert "--allow-scout-down" in content
     assert "--enforce --json" in content
     assert "--operate-interval-seconds" in content
     assert "--no-rollback-on-verify-failure" in content

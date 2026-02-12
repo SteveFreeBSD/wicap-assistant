@@ -30,7 +30,7 @@ from wicap_assist.rollout_gates import (
     evaluate_rollout_gates,
     load_rollout_gate_history,
 )
-from wicap_assist.runtime_contract import run_runtime_contract_check
+from wicap_assist.runtime_contract import evaluate_runtime_contract_report, run_runtime_contract_check
 from wicap_assist.util.time import utc_now_iso
 
 _PHASE_SEQUENCE = (
@@ -88,41 +88,7 @@ def _runtime_contract_ok(
     *,
     require_scout: bool,
 ) -> tuple[bool, dict[str, Any]]:
-    status = str(report.get("status", "")).strip().lower()
-    checks = report.get("checks", [])
-    if status == "pass":
-        return True, {"ignored_checks": []}
-    if not isinstance(checks, list):
-        return False, {"ignored_checks": [], "reason": "invalid_contract_report_shape"}
-
-    failed = [
-        check
-        for check in checks
-        if isinstance(check, dict) and str(check.get("severity", "")).strip().lower() == "fail"
-    ]
-    if not failed:
-        return False, {"ignored_checks": [], "reason": "contract_status_fail_without_failed_checks"}
-
-    ignored: list[dict[str, Any]] = []
-    kept: list[dict[str, Any]] = []
-    for check in failed:
-        kind = str(check.get("kind", "")).strip().lower()
-        name = str(check.get("name", "")).strip().lower()
-        if not require_scout and kind == "service_state" and name == "wicap-scout":
-            ignored.append(check)
-            continue
-        kept.append(check)
-
-    if not kept and ignored:
-        return True, {
-            "ignored_checks": ignored,
-            "reason": "only_wicap_scout_failed",
-        }
-    return False, {
-        "ignored_checks": ignored,
-        "failed_checks": kept,
-        "reason": "non_ignored_failures_present",
-    }
+    return evaluate_runtime_contract_report(report, require_scout=require_scout)
 
 
 def _verify_failed_for_insufficient_data(verify_detail: dict[str, Any]) -> bool:

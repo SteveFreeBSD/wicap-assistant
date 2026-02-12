@@ -238,6 +238,42 @@ def evaluate_runtime_contract(
     }
 
 
+def evaluate_runtime_contract_report(
+    report: dict[str, Any],
+    *,
+    require_scout: bool,
+) -> tuple[bool, dict[str, Any]]:
+    """Evaluate contract-check report with optional scout requirement semantics."""
+    status = str(report.get("status", "")).strip().lower()
+    checks = report.get("checks", [])
+    if status == "pass":
+        return True, {"ignored_checks": []}
+    if not isinstance(checks, list):
+        return False, {"ignored_checks": [], "reason": "invalid_contract_report_shape"}
+
+    failed = [
+        check
+        for check in checks
+        if isinstance(check, dict) and str(check.get("severity", "")).strip().lower() == "fail"
+    ]
+    if not failed:
+        return False, {"ignored_checks": [], "reason": "contract_status_fail_without_failed_checks"}
+
+    ignored: list[dict[str, Any]] = []
+    kept: list[dict[str, Any]] = []
+    for check in failed:
+        kind = str(check.get("kind", "")).strip().lower()
+        name = str(check.get("name", "")).strip().lower()
+        if not require_scout and kind == "service_state" and name == "wicap-scout":
+            ignored.append(check)
+            continue
+        kept.append(check)
+
+    if not kept and ignored:
+        return True, {"ignored_checks": ignored, "reason": "only_wicap_scout_failed"}
+    return False, {"ignored_checks": ignored, "failed_checks": kept, "reason": "non_ignored_failures_present"}
+
+
 def run_runtime_contract_check(
     *,
     repo_root: Path | None = None,
