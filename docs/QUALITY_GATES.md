@@ -53,9 +53,9 @@ Define the deterministic checks that must pass before release freezes or major c
 
 ### Certification scaffolds
 - `tests/replay/test_replay_certification.py`
-  - Replay certification writes deterministic certification records.
+  - Replay certification runs deterministic fixture-case replays (`tests/replay/fixtures/default.json`) and writes certification records.
 - `tests/chaos/test_chaos_certification.py`
-  - Chaos certification computes bounded degraded-cycle rates and persists results.
+  - Chaos certification runs deterministic outage scenarios (`tests/chaos/fixtures/default.json`), enforces action allowlists, and persists bounded degraded-cycle rates.
 
 ## Release Checklist
 1. `pytest -q`

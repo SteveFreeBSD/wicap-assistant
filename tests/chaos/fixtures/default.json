@@ -1,0 +1,98 @@
+{
+  "max_degraded_rate": 0.05,
+  "scenarios": [
+    {
+      "id": "ui_outage_recover",
+      "mode": "assist",
+      "check_threshold": 1,
+      "recover_threshold": 1,
+      "max_recover_attempts": 1,
+      "action_cooldown_cycles": 0,
+      "runner_plan": {
+        "status_check": {"returncode": 0, "stdout": "ok"},
+        "restart_service:wicap-ui": {"returncode": 0, "stdout": "ok"}
+      },
+      "observations": [
+        {"ts": "2026-02-12T00:10:00Z", "down_services": ["wicap-ui"]},
+        {"ts": "2026-02-12T00:10:05Z", "down_services": ["wicap-ui"]},
+        {"ts": "2026-02-12T00:10:10Z", "down_services": ["wicap-ui"]},
+        {"ts": "2026-02-12T00:10:15Z", "down_services": []}
+      ],
+      "expected_events": [
+        {"decision": "service_health", "status": "down_detected"},
+        {"decision": "service_health", "status": "down_detected"},
+        {"decision": "threshold_check", "action": "status_check", "status": "executed_ok", "service": "wicap-ui"},
+        {"decision": "service_health", "status": "down_detected"},
+        {"decision": "threshold_recover", "action": "restart_service:wicap-ui", "status": "executed_ok", "service": "wicap-ui"},
+        {"decision": "service_health", "status": "stable"}
+      ],
+      "expect": {
+        "max_escalations": 0,
+        "max_degraded_events": 0,
+        "required_actions": [
+          {"action": "status_check", "status": "executed_ok"},
+          {"action": "restart_service:wicap-ui", "status": "executed_ok"}
+        ]
+      }
+    },
+    {
+      "id": "processor_outage_recover",
+      "mode": "assist",
+      "check_threshold": 1,
+      "recover_threshold": 1,
+      "max_recover_attempts": 1,
+      "action_cooldown_cycles": 0,
+      "runner_plan": {
+        "status_check": {"returncode": 0, "stdout": "ok"},
+        "restart_service:wicap-processor": {"returncode": 0, "stdout": "ok"}
+      },
+      "observations": [
+        {"ts": "2026-02-12T00:11:00Z", "down_services": ["wicap-processor"]},
+        {"ts": "2026-02-12T00:11:05Z", "down_services": ["wicap-processor"]},
+        {"ts": "2026-02-12T00:11:10Z", "down_services": []}
+      ],
+      "expected_events": [
+        {"decision": "service_health", "status": "down_detected"},
+        {"decision": "threshold_check", "action": "status_check", "status": "executed_ok", "service": "wicap-processor"},
+        {"decision": "service_health", "status": "down_detected"},
+        {"decision": "threshold_recover", "action": "restart_service:wicap-processor", "status": "executed_ok", "service": "wicap-processor"},
+        {"decision": "service_health", "status": "stable"}
+      ],
+      "expect": {
+        "max_escalations": 0,
+        "max_degraded_events": 0,
+        "required_actions": [
+          {"action": "restart_service:wicap-processor", "status": "executed_ok"}
+        ]
+      }
+    },
+    {
+      "id": "observe_mode_no_actions",
+      "mode": "observe",
+      "check_threshold": 1,
+      "recover_threshold": 1,
+      "max_recover_attempts": 1,
+      "action_cooldown_cycles": 0,
+      "runner_plan": {
+        "*": {"returncode": 0, "stdout": "ok"}
+      },
+      "observations": [
+        {"ts": "2026-02-12T00:12:00Z", "down_services": ["wicap-ui"]},
+        {"ts": "2026-02-12T00:12:05Z", "down_services": ["wicap-ui"]}
+      ],
+      "expected_events": [
+        {"decision": "service_health", "status": "down_detected"},
+        {"decision": "service_health", "status": "down_detected"},
+        {"decision": "threshold_check", "action": "status_check", "status": "skipped_observe_mode", "service": "wicap-ui"}
+      ],
+      "expect": {
+        "max_escalations": 0,
+        "max_degraded_events": 0,
+        "max_executed_actions": 1,
+        "required_actions": [
+          {"action": "status_check", "status": "skipped_observe_mode"}
+        ]
+      }
+    }
+  ]
+}

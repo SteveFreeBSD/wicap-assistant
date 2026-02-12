@@ -74,7 +74,12 @@ def evaluate_rollout_gates(
         if ts_dt is None or ts_dt < cutoff:
             continue
         payload = _feature_payload(row["feature_json"])
-        reward_values.append(_safe_float(payload.get("reward_value", 0.0)))
+        status = str(row["status"] or "").strip().lower()
+        action_bearing = bool(payload.get("is_executed_action"))
+        if status in {"executed_ok", "executed_fail", "rejected", "missing_script", "escalated"}:
+            action_bearing = True
+        if action_bearing:
+            reward_values.append(_safe_float(payload.get("reward_value", 0.0)))
         samples = _safe_int(payload.get("shadow_gate_samples", 0))
         if samples > 0 and latest_shadow is None:
             latest_shadow = {

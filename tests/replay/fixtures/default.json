@@ -1,0 +1,54 @@
+{
+  "cases": [
+    {
+      "id": "ui_recovery_ladder",
+      "mode": "assist",
+      "check_threshold": 1,
+      "recover_threshold": 1,
+      "max_recover_attempts": 1,
+      "action_cooldown_cycles": 0,
+      "runner_plan": {
+        "status_check": {"returncode": 0, "stdout": "ok"},
+        "restart_service:wicap-ui": {"returncode": 0, "stdout": "restarted"}
+      },
+      "observations": [
+        {"ts": "2026-02-12T00:00:00Z", "down_services": ["wicap-ui"]},
+        {"ts": "2026-02-12T00:00:05Z", "down_services": ["wicap-ui"]},
+        {"ts": "2026-02-12T00:00:10Z", "down_services": ["wicap-ui"]},
+        {"ts": "2026-02-12T00:00:15Z", "down_services": []}
+      ],
+      "expected_events": [
+        {"decision": "service_health", "status": "down_detected"},
+        {"decision": "service_health", "status": "down_detected"},
+        {"decision": "threshold_check", "action": "status_check", "status": "executed_ok", "service": "wicap-ui"},
+        {"decision": "service_health", "status": "down_detected"},
+        {"decision": "threshold_recover", "action": "restart_service:wicap-ui", "status": "executed_ok", "service": "wicap-ui"},
+        {"decision": "service_health", "status": "stable"}
+      ]
+    },
+    {
+      "id": "redis_fast_recovery",
+      "mode": "assist",
+      "check_threshold": 1,
+      "recover_threshold": 1,
+      "max_recover_attempts": 1,
+      "action_cooldown_cycles": 0,
+      "runner_plan": {
+        "status_check": {"returncode": 0, "stdout": "ok"},
+        "restart_service:wicap-redis": {"returncode": 0, "stdout": "restarted"}
+      },
+      "observations": [
+        {"ts": "2026-02-12T00:01:00Z", "down_services": ["wicap-redis"]},
+        {"ts": "2026-02-12T00:01:05Z", "down_services": ["wicap-redis"]},
+        {"ts": "2026-02-12T00:01:10Z", "down_services": []}
+      ],
+      "expected_events": [
+        {"decision": "service_health", "status": "down_detected"},
+        {"decision": "threshold_check", "action": "status_check", "status": "executed_ok", "service": "wicap-redis"},
+        {"decision": "service_health", "status": "down_detected"},
+        {"decision": "threshold_recover", "action": "restart_service:wicap-redis", "status": "executed_ok", "service": "wicap-redis"},
+        {"decision": "service_health", "status": "stable"}
+      ]
+    }
+  ]
+}

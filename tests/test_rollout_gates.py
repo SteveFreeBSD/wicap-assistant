@@ -112,3 +112,58 @@ def test_evaluate_promotion_readiness_requires_consecutive_passes() -> None:
     report2 = evaluate_promotion_readiness(history_with_fail, required_consecutive_passes=2)
     assert bool(report2["ready"]) is False
     assert int(report2["consecutive_passes"]) == 1
+
+
+def test_reward_gate_ignores_non_action_stable_cycles(tmp_path) -> None:
+    conn = connect_db(tmp_path / "assistant.db")
+    try:
+        for idx in range(100):
+            insert_decision_feature(
+                conn,
+                control_session_id=None,
+                soak_run_id=None,
+                episode_id=None,
+                ts=f"2026-02-11T03:00:{idx % 60:02d}+00:00",
+                mode="assist",
+                policy_profile="assist-v1",
+                decision="service_health",
+                action=None,
+                status="stable",
+                feature_json={
+                    "reward_value": 0.0,
+                    "is_executed_action": False,
+                },
+            )
+        insert_decision_feature(
+            conn,
+            control_session_id=None,
+            soak_run_id=None,
+            episode_id=None,
+            ts="2026-02-11T03:02:00+00:00",
+            mode="assist",
+            policy_profile="assist-v1",
+            decision="threshold_recover",
+            action="restart_service:wicap-ui",
+            status="executed_ok",
+            feature_json={
+                "reward_value": 0.3,
+                "is_executed_action": True,
+            },
+        )
+        conn.commit()
+
+        report = evaluate_rollout_gates(
+            conn,
+            lookback_days=14,
+            min_shadow_samples=1,
+            min_shadow_agreement_rate=0.0,
+            min_shadow_success_rate=0.0,
+            min_autonomous_runs=0,
+            min_reward_avg=0.05,
+            now_ts="2026-02-12T00:00:00+00:00",
+        )
+        reward_gate = report["gates"]["reward_stability"]
+        assert reward_gate["sample_count"] == 1
+        assert reward_gate["status"] == "pass"
+    finally:
+        conn.close()
