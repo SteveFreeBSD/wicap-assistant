@@ -77,7 +77,7 @@ def run_allowlisted_action(
         restart_service = action_name.split(":", 1)[1].strip()
         action_name = "restart_service"
 
-    if action_name not in {"status_check", "compose_up", "shutdown", "restart_service"}:
+    if action_name not in {"status_check", "compose_up", "compose_up_core", "shutdown", "restart_service"}:
         return ActuatorResult(status="rejected", commands=[], detail=f"unknown action: {action}")
 
     policy = plane_policy or ControlPlanePolicy.from_env()
@@ -107,6 +107,8 @@ def run_allowlisted_action(
             commands = [[sys.executable, str(script), "--local-only", "--json"]]
     elif action_name == "compose_up":
         commands = [["docker", "compose", "up", "-d"]]
+    elif action_name == "compose_up_core":
+        commands = [["docker", "compose", "up", "-d", "redis", "processor", "ui"]]
     elif action_name == "restart_service":
         service = str(restart_service or "").strip().lower()
         service = RESTART_SERVICE_ALIASES.get(service, service)

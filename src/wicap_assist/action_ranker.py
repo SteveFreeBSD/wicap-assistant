@@ -9,7 +9,7 @@ from typing import Any, Mapping
 
 from wicap_assist.actuators import ALLOWED_RESTART_SERVICES
 
-_BASE_ACTIONS = ("status_check", "compose_up", "shutdown")
+_BASE_ACTIONS = ("status_check", "compose_up_core", "shutdown")
 _DEFAULT_SHADOW_GATE_WINDOW = 160
 _DEFAULT_SHADOW_GATE_MIN_SAMPLES = 20
 _DEFAULT_SHADOW_GATE_MIN_AGREEMENT = 0.7
@@ -89,7 +89,7 @@ def _context_boost(action: str, *, down_services: list[str], mode: str) -> float
     if lowered.startswith("restart_service:"):
         service = lowered.split(":", 1)[1].strip()
         return 8.0 if service in down_services else 1.0
-    if lowered == "compose_up":
+    if lowered in {"compose_up", "compose_up_core"}:
         if len(down_services) >= 2:
             return 5.0
         if len(down_services) == 1:

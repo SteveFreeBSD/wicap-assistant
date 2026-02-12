@@ -7,8 +7,8 @@ import hashlib
 from typing import Any
 
 ROLE_ALLOWED_ACTIONS: dict[str, tuple[str, ...]] = {
-    "planner": ("status_check", "compose_up", "shutdown", "restart_service"),
-    "executor": ("status_check", "compose_up", "shutdown", "restart_service"),
+    "planner": ("status_check", "compose_up", "compose_up_core", "shutdown", "restart_service"),
+    "executor": ("status_check", "compose_up", "compose_up_core", "shutdown", "restart_service"),
     "verifier": ("status_check",),
     "memory": (),
 }

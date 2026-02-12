@@ -33,7 +33,9 @@ The assistant follows a deterministic sense-decide-act loop:
 5. Guide: emit operator guidance and promotion gate metrics.
 
 ## Safety Model
-- Action allowlist only (`status_check`, `compose_up`, `shutdown`, `restart_service:<allowlisted>`).
+- Action allowlist only (`status_check`, `compose_up_core`, `compose_up`, `shutdown`, `restart_service:<allowlisted>`).
+  - `compose_up_core` starts only `redis`, `processor`, and `ui` (SSH-safe default).
+  - `compose_up` starts all compose services (may include `scout`).
 - Plane-separated policy checks (runtime/tool/elevated).
 - Autonomous kill-switches:
   - env: `WICAP_ASSIST_AUTONOMOUS_KILL_SWITCH=1`
@@ -129,6 +131,10 @@ wicap-assist soak-run --duration-minutes 30 --playwright-interval-minutes 5 --co
 Autopilot supervisor (hands-off state machine):
 ```bash
 wicap-assist autopilot --control-mode assist --operate-cycles 6 --stop-on-escalation
+```
+If you require capture (`scout`) to be running as part of autopilot preflight/contract gating:
+```bash
+wicap-assist autopilot --control-mode assist --require-scout
 ```
 
 Interactive agent console:

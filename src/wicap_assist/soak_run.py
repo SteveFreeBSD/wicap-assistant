@@ -603,7 +603,7 @@ def run_supervised_soak(
     )
 
     preflight_issue_count = 0
-    startup_actions = ["compose_up", "status_check"] if bool(managed_observe) else ["status_check"]
+    startup_actions = ["compose_up_core", "status_check"] if bool(managed_observe) else ["status_check"]
     for action in startup_actions:
         action_result = run_allowlisted_action(
             action=action,

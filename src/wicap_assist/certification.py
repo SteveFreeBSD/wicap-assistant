@@ -15,7 +15,7 @@ from wicap_assist.soak_control import ControlPolicy
 from wicap_assist.util.time import utc_now_iso
 
 _DEGRADED_STATUSES = {"executed_fail", "escalated", "rejected", "failed", "missing_script"}
-_ALLOWLISTED_ACTION_BASES = {"status_check", "compose_up", "shutdown", "restart_service"}
+_ALLOWLISTED_ACTION_BASES = {"status_check", "compose_up", "compose_up_core", "shutdown", "restart_service"}
 
 
 def _safe_float(value: object, default: float = 0.0) -> float:
@@ -77,6 +77,8 @@ def _command_to_action(command: list[str]) -> str:
     if len(command) >= 4 and command[:4] == ["docker", "compose", "down", "--remove-orphans"]:
         return "shutdown"
     if len(command) >= 3 and command[:3] == ["docker", "compose", "up"]:
+        if any(str(token).strip().lower() in {"redis", "processor", "ui"} for token in command[3:]):
+            return "compose_up_core"
         return "compose_up"
     joined = " ".join(command)
     if "check_wicap_status" in joined:

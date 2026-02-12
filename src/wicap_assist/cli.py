@@ -1146,14 +1146,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="Do not fail preflight/start when runtime contract check fails",
     )
     autopilot_parser.add_argument(
+        "--require-scout",
+        action="store_true",
+        help="Require wicap-scout to be up in runtime contract checks (disabled by default for SSH-safe boot)",
+    )
+    autopilot_parser.add_argument(
         "--no-startup",
         action="store_true",
         help="Skip startup actions in start phase",
     )
     autopilot_parser.add_argument(
         "--startup-actions",
-        default="compose_up",
-        help="Comma-separated allowlisted startup actions (default: compose_up)",
+        default="compose_up_core",
+        help="Comma-separated allowlisted startup actions (default: compose_up_core)",
     )
     autopilot_parser.add_argument(
         "--operate-cycles",
@@ -1206,7 +1211,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     autopilot_parser.add_argument(
         "--rollback-actions",
-        default="shutdown,compose_up",
+        default="shutdown,compose_up_core",
         help="Comma-separated allowlisted rollback actions",
     )
     autopilot_parser.add_argument(
@@ -1445,7 +1450,7 @@ def build_parser() -> argparse.ArgumentParser:
     agent_parser.add_argument(
         "--action",
         default="status_check",
-        help="Action to evaluate for sandbox-explain (for example: status_check, compose_up, restart_service:wicap-ui)",
+        help="Action to evaluate for sandbox-explain (for example: status_check, compose_up_core, compose_up, restart_service:wicap-ui)",
     )
     agent_parser.add_argument(
         "--mode",
@@ -1814,12 +1819,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 repo_root=Path(args.repo_root) if args.repo_root is not None else None,
                 contract_path=Path(args.contract_path) if args.contract_path is not None else None,
                 require_runtime_contract=not bool(args.no_require_runtime_contract),
+                require_scout=bool(args.require_scout),
                 startup_actions=tuple(
                     item.strip().lower()
                     for item in str(args.startup_actions).split(",")
                     if item.strip()
                 )
-                or ("compose_up",),
+                or ("compose_up_core",),
                 perform_startup=not bool(args.no_startup),
                 operate_cycles=max(1, int(args.operate_cycles)),
                 operate_interval_seconds=max(0.1, float(args.operate_interval_seconds)),
@@ -1835,7 +1841,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     for item in str(args.rollback_actions).split(",")
                     if item.strip()
                 )
-                or ("shutdown", "compose_up"),
+                or ("shutdown", "compose_up_core"),
                 report_path=Path(args.report_path) if args.report_path is not None else None,
                 max_runs=int(args.max_runs),
                 pause_seconds_between_runs=max(0.1, float(args.pause_seconds_between_runs)),

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 import shutil
 import sqlite3
@@ -59,6 +60,63 @@ def _latest_control_session(conn: sqlite3.Connection) -> sqlite3.Row | None:
     ).fetchone()
 
 
+def _run_id_stamp(now_text: str) -> str:
+    value = str(now_text or "").strip()
+    if value.endswith("Z"):
+        value = value[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        compact = "".join(ch for ch in value if ch.isdigit())
+        return compact[:14] or "unknown"
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    parsed = parsed.astimezone(timezone.utc)
+    return parsed.strftime("%Y%m%d%H%M%SZ")
+
+
+def _runtime_contract_ok(
+    report: dict[str, Any],
+    *,
+    require_scout: bool,
+) -> tuple[bool, dict[str, Any]]:
+    status = str(report.get("status", "")).strip().lower()
+    checks = report.get("checks", [])
+    if status == "pass":
+        return True, {"ignored_checks": []}
+    if not isinstance(checks, list):
+        return False, {"ignored_checks": [], "reason": "invalid_contract_report_shape"}
+
+    failed = [
+        check
+        for check in checks
+        if isinstance(check, dict) and str(check.get("severity", "")).strip().lower() == "fail"
+    ]
+    if not failed:
+        return False, {"ignored_checks": [], "reason": "contract_status_fail_without_failed_checks"}
+
+    ignored: list[dict[str, Any]] = []
+    kept: list[dict[str, Any]] = []
+    for check in failed:
+        kind = str(check.get("kind", "")).strip().lower()
+        name = str(check.get("name", "")).strip().lower()
+        if not require_scout and kind == "service_state" and name == "wicap-scout":
+            ignored.append(check)
+            continue
+        kept.append(check)
+
+    if not kept and ignored:
+        return True, {
+            "ignored_checks": ignored,
+            "reason": "only_wicap_scout_failed",
+        }
+    return False, {
+        "ignored_checks": ignored,
+        "failed_checks": kept,
+        "reason": "non_ignored_failures_present",
+    }
+
+
 def _write_json(path: Path, payload: dict[str, Any]) -> Path:
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -111,7 +169,8 @@ def run_autopilot_supervisor(
     repo_root: Path | None = None,
     contract_path: Path | None = None,
     require_runtime_contract: bool = True,
-    startup_actions: tuple[str, ...] = ("compose_up",),
+    require_scout: bool = False,
+    startup_actions: tuple[str, ...] = ("compose_up_core",),
     perform_startup: bool = True,
     operate_cycles: int = 6,
     operate_interval_seconds: float = 5.0,
@@ -122,7 +181,7 @@ def run_autopilot_supervisor(
     gate_history_file: Path = Path("data/reports/rollout_gates_history.jsonl"),
     required_consecutive_passes: int = 2,
     rollback_on_verify_failure: bool = True,
-    rollback_actions: tuple[str, ...] = ("shutdown", "compose_up"),
+    rollback_actions: tuple[str, ...] = ("shutdown", "compose_up_core"),
     report_path: Path | None = Path("data/reports/autopilot_latest.json"),
     max_runs: int = 1,
     pause_seconds_between_runs: float = 10.0,
@@ -148,8 +207,7 @@ def run_autopilot_supervisor(
     while infinite or run_index < cycle_limit:
         run_index += 1
         started_ts = str(now_fn())
-        stamp = started_ts.replace(":", "").replace("-", "").replace("T", "").replace("+00:00", "Z").replace("Z", "")
-        run_id = f"autopilot-{stamp}-{run_index}"
+        run_id = f"autopilot-{_run_id_stamp(started_ts)}-{run_index}"
         run_row_id = insert_autopilot_run(
             conn,
             run_id=run_id,
@@ -160,6 +218,7 @@ def run_autopilot_supervisor(
                 "mode": resolved_mode,
                 "repo_root": str(resolved_repo_root),
                 "require_runtime_contract": bool(require_runtime_contract),
+                "require_scout": bool(require_scout),
                 "perform_startup": bool(perform_startup),
                 "startup_actions": list(startup_plan),
                 "operate_cycles": int(max(1, int(operate_cycles))),
@@ -201,7 +260,7 @@ def run_autopilot_supervisor(
                 repo_root=resolved_repo_root,
                 contract_path=contract_path,
             )
-            contract_ok = str(runtime_report.get("status", "")).strip().lower() == "pass"
+            contract_ok, contract_detail = _runtime_contract_ok(runtime_report, require_scout=bool(require_scout))
             preflight_ok = bool(
                 docker_available
                 and python3_available
@@ -213,7 +272,9 @@ def run_autopilot_supervisor(
                 "python3_available": python3_available,
                 "compose_exists": bool(compose_exists),
                 "runtime_contract_required": bool(require_runtime_contract),
+                "runtime_contract_require_scout": bool(require_scout),
                 "runtime_contract_status": str(runtime_report.get("status")),
+                "runtime_contract_eval": contract_detail,
                 "runtime_contract_report": runtime_report,
                 "repo_root": str(resolved_repo_root),
             }
@@ -270,13 +331,17 @@ def run_autopilot_supervisor(
                 control_mode="observe",
             )
             post_start_contract = contract_runner(repo_root=resolved_repo_root, contract_path=contract_path)
-            post_start_ok = str(post_start_contract.get("status", "")).strip().lower() == "pass"
+            post_start_ok, post_start_eval = _runtime_contract_ok(
+                post_start_contract,
+                require_scout=bool(require_scout),
+            )
             start_ok = bool(startup_ok and start_live_rc == 0 and (post_start_ok or not bool(require_runtime_contract)))
             start_detail = {
                 "startup_performed": bool(perform_startup),
                 "startup_results": startup_results,
                 "start_live_return_code": int(start_live_rc),
                 "post_start_contract_status": str(post_start_contract.get("status")),
+                "post_start_contract_eval": post_start_eval,
                 "post_start_contract_report": post_start_contract,
             }
             _phase_end(

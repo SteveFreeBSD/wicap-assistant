@@ -39,7 +39,7 @@ def _default_policy_profile(
         default_recover = 3
         default_max_recover = 3
         default_cooldown = 1
-        default_rollbacks = ("shutdown", "compose_up")
+        default_rollbacks = ("shutdown", "compose_up_core")
         return {
             "name": "autonomous-v1",
             "check_threshold": max(1, int(check_threshold if check_threshold is not None else default_check)),
@@ -631,7 +631,7 @@ class ControlPolicy:
                 recover_action = (
                     f"restart_service:{service_name}"
                     if recover_attempts == 0
-                    else "compose_up"
+                    else "compose_up_core"
                 )
                 status, command, detail, policy_trace, failure_class = self._run_allowlisted(recover_action)
                 state["recover_attempts"] = recover_attempts + 1

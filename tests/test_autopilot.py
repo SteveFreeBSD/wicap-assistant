@@ -119,7 +119,7 @@ def test_autopilot_supervisor_rolls_back_on_verify_failure(tmp_path: Path, monke
     latest = report["latest"]
     assert latest["status"] == "rolled_back"
     assert latest["promotion_decision"] == "rollback"
-    assert actions == ["shutdown", "compose_up"]
+    assert actions == ["shutdown", "compose_up_core"]
 
     run_row = conn.execute(
         "SELECT status, summary_json FROM autopilot_runs ORDER BY id DESC LIMIT 1"
@@ -128,4 +128,86 @@ def test_autopilot_supervisor_rolls_back_on_verify_failure(tmp_path: Path, monke
     assert str(run_row["status"]) == "rolled_back"
     summary = json.loads(str(run_row["summary_json"]))
     assert summary["promotion_decision"] == "rollback"
+    conn.close()
+
+
+def test_autopilot_ignores_missing_scout_by_default(tmp_path: Path, monkeypatch) -> None:
+    db_path = tmp_path / "assistant.db"
+    conn = connect_db(db_path)
+    repo_root = tmp_path / "wicap"
+    repo_root.mkdir(parents=True, exist_ok=True)
+    (repo_root / "docker-compose.yml").write_text("services: {}\n", encoding="utf-8")
+
+    monkeypatch.setattr("wicap_assist.autopilot.shutil.which", lambda _name: "/usr/bin/fake")
+
+    contract_report = {
+        "status": "fail",
+        "checks": [
+            {"kind": "service_state", "name": "wicap-scout", "severity": "fail", "ok": False, "critical": True},
+        ],
+    }
+
+    monkeypatch.setattr("wicap_assist.autopilot.run_allowlisted_action", lambda **kwargs: ActuatorResult(status="executed_ok", commands=[], detail="ok", policy_trace={}))  # type: ignore[no-untyped-def]
+
+    report = run_autopilot_supervisor(
+        conn,
+        mode="assist",
+        repo_root=repo_root,
+        require_runtime_contract=True,
+        require_scout=False,
+        perform_startup=False,
+        operate_cycles=1,
+        operate_interval_seconds=0.1,
+        required_consecutive_passes=1,
+        gate_history_file=tmp_path / "rollout_history.jsonl",
+        report_path=tmp_path / "autopilot_latest.json",
+        max_runs=1,
+        live_runner=lambda *args, **kwargs: 0,  # type: ignore[no-untyped-def]
+        contract_runner=lambda **kwargs: dict(contract_report),  # type: ignore[no-untyped-def]
+        rollout_runner=lambda _conn: {"overall_pass": True, "generated_ts": "2026-02-12T00:00:00Z", "gates": {}},  # type: ignore[no-untyped-def]
+    )
+
+    assert report["latest"]["status"] in {"hold", "promoted"}
+    assert report["latest"]["phase_results"][0]["status"] == "pass"
+    conn.close()
+
+
+def test_autopilot_requires_scout_when_flag_enabled(tmp_path: Path, monkeypatch) -> None:
+    db_path = tmp_path / "assistant.db"
+    conn = connect_db(db_path)
+    repo_root = tmp_path / "wicap"
+    repo_root.mkdir(parents=True, exist_ok=True)
+    (repo_root / "docker-compose.yml").write_text("services: {}\n", encoding="utf-8")
+
+    monkeypatch.setattr("wicap_assist.autopilot.shutil.which", lambda _name: "/usr/bin/fake")
+
+    contract_report = {
+        "status": "fail",
+        "checks": [
+            {"kind": "service_state", "name": "wicap-scout", "severity": "fail", "ok": False, "critical": True},
+        ],
+    }
+
+    monkeypatch.setattr("wicap_assist.autopilot.run_allowlisted_action", lambda **kwargs: ActuatorResult(status="executed_ok", commands=[], detail="ok", policy_trace={}))  # type: ignore[no-untyped-def]
+
+    report = run_autopilot_supervisor(
+        conn,
+        mode="assist",
+        repo_root=repo_root,
+        require_runtime_contract=True,
+        require_scout=True,
+        perform_startup=False,
+        operate_cycles=1,
+        operate_interval_seconds=0.1,
+        required_consecutive_passes=1,
+        gate_history_file=tmp_path / "rollout_history.jsonl",
+        report_path=tmp_path / "autopilot_latest.json",
+        max_runs=1,
+        live_runner=lambda *args, **kwargs: 0,  # type: ignore[no-untyped-def]
+        contract_runner=lambda **kwargs: dict(contract_report),  # type: ignore[no-untyped-def]
+        rollout_runner=lambda _conn: {"overall_pass": True, "generated_ts": "2026-02-12T00:00:00Z", "gates": {}},  # type: ignore[no-untyped-def]
+    )
+
+    assert report["latest"]["status"] == "failed_preflight"
+    assert report["latest"]["phase_results"][0]["status"] == "fail"
     conn.close()

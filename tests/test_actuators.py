@@ -35,6 +35,17 @@ def test_compose_up_observe_mode_is_skipped(tmp_path: Path) -> None:
     assert result.commands == [["docker", "compose", "up", "-d"]]
 
 
+def test_compose_up_core_observe_mode_is_skipped(tmp_path: Path) -> None:
+    result = run_allowlisted_action(
+        action="compose_up_core",
+        mode="observe",
+        repo_root=tmp_path,
+        runner=lambda *args, **kwargs: _DummyResult(0),  # type: ignore[no-untyped-def]
+    )
+    assert result.status == "skipped_observe_mode"
+    assert result.commands == [["docker", "compose", "up", "-d", "redis", "processor", "ui"]]
+
+
 def test_shutdown_executes_stop_script_then_compose_down(tmp_path: Path) -> None:
     repo = tmp_path / "wicap"
     stop_script = repo / "scripts" / "stop_wicap.py"
@@ -126,6 +137,25 @@ def test_autonomous_mode_executes_allowlisted_action(tmp_path: Path) -> None:
 
     assert result.status == "executed_ok"
     assert calls == [["docker", "compose", "up", "-d"]]
+
+
+def test_autonomous_mode_executes_compose_up_core(tmp_path: Path) -> None:
+    repo = tmp_path / "wicap"
+    calls: list[list[str]] = []
+
+    def fake_runner(cmd, cwd, capture_output, text, check, timeout):  # type: ignore[no-untyped-def]
+        calls.append(list(cmd))
+        return _DummyResult(0, stdout="ok")
+
+    result = run_allowlisted_action(
+        action="compose_up_core",
+        mode="autonomous",
+        repo_root=repo,
+        runner=fake_runner,
+    )
+
+    assert result.status == "executed_ok"
+    assert calls == [["docker", "compose", "up", "-d", "redis", "processor", "ui"]]
 
 
 def test_status_check_uses_normalized_action_and_json_flag(tmp_path: Path) -> None:

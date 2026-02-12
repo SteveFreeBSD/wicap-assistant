@@ -21,12 +21,12 @@ _CLASS_PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
 )
 
 _ACTION_LADDERS: dict[str, tuple[str, ...]] = {
-    "wifi_disruption": ("status_check", "restart_service:wicap-scout", "compose_up"),
+    "wifi_disruption": ("status_check", "restart_service:wicap-scout", "compose_up_core"),
     "probe_recon": ("status_check", "restart_service:wicap-scout"),
-    "dns_drift": ("status_check", "restart_service:wicap-processor", "compose_up"),
-    "http_drift": ("status_check", "restart_service:wicap-ui", "compose_up"),
-    "service_runtime": ("status_check", "restart_service:wicap-processor", "compose_up"),
-    "generic_network_anomaly": ("status_check", "compose_up"),
+    "dns_drift": ("status_check", "restart_service:wicap-processor", "compose_up_core"),
+    "http_drift": ("status_check", "restart_service:wicap-ui", "compose_up_core"),
+    "service_runtime": ("status_check", "restart_service:wicap-processor", "compose_up_core"),
+    "generic_network_anomaly": ("status_check", "compose_up_core"),
 }
 
 _VERIFY_LADDERS: dict[str, tuple[str, ...]] = {
@@ -77,6 +77,8 @@ def action_to_runbook_step(action: str) -> str:
         return "python scripts/check_wicap_status.py --local-only"
     if normalized == "compose_up":
         return "docker compose up -d"
+    if normalized == "compose_up_core":
+        return "docker compose up -d redis processor ui"
     if normalized == "shutdown":
         return "docker compose down --remove-orphans"
     if normalized.startswith("restart_service:"):

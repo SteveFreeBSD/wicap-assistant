@@ -67,8 +67,8 @@ class ControlPlanePolicy:
     runtime_enabled: bool = True
     tool_policy_enabled: bool = True
     elevated_enabled: bool = True
-    allowlisted_actions: tuple[str, ...] = ("status_check", "compose_up", "shutdown", "restart_service")
-    elevated_required_actions: tuple[str, ...] = ("compose_up", "shutdown", "restart_service")
+    allowlisted_actions: tuple[str, ...] = ("status_check", "compose_up", "compose_up_core", "shutdown", "restart_service")
+    elevated_required_actions: tuple[str, ...] = ("compose_up", "compose_up_core", "shutdown", "restart_service")
     deny_actions: tuple[str, ...] = ()
     action_budget_max: int | None = None
     elevated_action_budget_max: int | None = None

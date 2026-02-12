@@ -508,7 +508,7 @@ def test_soak_run_managed_observe_collects_live_metrics(tmp_path: Path) -> None:
     assert summary["cleanup_commands"]
     assert summary["preflight_actions"]
     assert int(summary["control_episode_count"]) >= int(summary["control_events_count"])
-    assert any(item.get("action") == "compose_up" for item in summary["preflight_actions"])
+    assert any(item.get("action") == "compose_up_core" for item in summary["preflight_actions"])
     assert any(item.get("action") == "status_check" for item in summary["preflight_actions"])
     assert observe_calls["count"] >= 2
     assert int(summary["control_actions_executed"]) >= 1
@@ -675,7 +675,7 @@ def test_soak_run_assist_prefers_live_runner_when_available(tmp_path: Path) -> N
     assert commands_seen
     assert any(len(cmd) > 1 and cmd[1] == str(fallback_runner) for cmd in commands_seen)
     assert summary["preflight_actions"]
-    assert any(item.get("action") == "compose_up" for item in summary["preflight_actions"])
+    assert any(item.get("action") == "compose_up_core" for item in summary["preflight_actions"])
 
     conn.close()
 
