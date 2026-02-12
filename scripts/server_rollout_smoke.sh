@@ -153,12 +153,14 @@ echo "[info] services=${services[*]}"
 echo "[step] starting WiCAP services"
 (cd "${WICAP_ROOT}" && docker compose up -d "${build_args[@]}" "${services[@]}")
 
-echo "[step] waiting for ui health"
+echo "[step] waiting for ui health (transient connection-refused is normal during startup)"
 health_payload="$(mktemp)"
-trap 'rm -f "${health_payload}"' EXIT
+curl_error="$(mktemp)"
+trap 'rm -f "${health_payload}" "${curl_error}"' EXIT
 elapsed=0
 while (( elapsed < UI_TIMEOUT_SECONDS )); do
-    if curl -fsS "http://127.0.0.1:8080/health" >"${health_payload}"; then
+    if curl -fsS "http://127.0.0.1:8080/health" >"${health_payload}" 2>"${curl_error}"; then
+        echo "[info] ui health ready after ${elapsed}s"
         break
     fi
     sleep 2
@@ -166,7 +168,9 @@ while (( elapsed < UI_TIMEOUT_SECONDS )); do
 done
 
 if [[ ! -s "${health_payload}" ]]; then
-    echo "ERROR: UI health did not become ready within ${UI_TIMEOUT_SECONDS}s." >&2
+    last_error="$(<"${curl_error}")"
+    last_error="${last_error//$'\n'/ }"
+    echo "ERROR: UI health did not become ready within ${UI_TIMEOUT_SECONDS}s. last_curl_error=${last_error:-none}" >&2
     (cd "${WICAP_ROOT}" && docker compose ps)
     (cd "${WICAP_ROOT}" && docker compose logs --tail 200 ui processor scout redis || true)
     exit 1
@@ -195,7 +199,7 @@ if [[ "${ENFORCE_GATE}" -eq 1 ]]; then
 fi
 
 gate_payload="$(mktemp)"
-trap 'rm -f "${health_payload}" "${gate_payload}"' EXIT
+trap 'rm -f "${health_payload}" "${curl_error}" "${gate_payload}"' EXIT
 gate_rc=0
 if ! (cd "${WICAP_ROOT}" && "${gate_cmd[@]}" >"${gate_payload}"); then
     gate_rc=$?
@@ -224,7 +228,7 @@ else
 fi
 
 assistant_rollout_payload="$(mktemp)"
-trap 'rm -f "${health_payload}" "${gate_payload}" "${assistant_rollout_payload}"' EXIT
+trap 'rm -f "${health_payload}" "${curl_error}" "${gate_payload}" "${assistant_rollout_payload}"' EXIT
 (cd "${ASSIST_ROOT}" && PYTHONPATH=src python3 -m wicap_assist.cli --db "${ASSIST_DB}" rollout-gates --json >"${assistant_rollout_payload}")
 python3 -m json.tool "${assistant_rollout_payload}"
 
