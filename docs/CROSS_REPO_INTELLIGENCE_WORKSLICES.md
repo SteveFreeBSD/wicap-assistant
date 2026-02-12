@@ -85,6 +85,9 @@ Canonical chain: `ASSISTANT_MISSION.md` -> `ASSISTANT_ROADMAP.md` -> this file
   - assistant DB tables `mission_runs`, `mission_steps`, `certification_runs`.
   - soak runs now persist mission graph snapshots.
   - assistant CLI adds `agent mission-graph`, `agent replay-certify`, `agent chaos-certify`.
+- Implemented autopilot supervisor runtime:
+  - assistant DB tables `autopilot_runs`, `autopilot_steps`.
+  - assistant CLI adds `autopilot` for deterministic preflight/start/operate/verify/promote-or-rollback/report orchestration.
 - Implemented memory/backend expansion baseline:
   - optional backend abstraction (`sqlite` default, `qdrant` fallback mode), retrieval citation traces.
   - memory maintenance compaction reporting + persisted compaction rows.

@@ -14,6 +14,7 @@ from wicap_assist.backfill_report import (
     generate_backfill_report,
 )
 from wicap_assist.agent_console import run_agent_console
+from wicap_assist.autopilot import run_autopilot_supervisor
 from wicap_assist.bundle import build_bundle, bundle_to_json, format_bundle_text
 from wicap_assist.changelog_stats import collect_changelog_stats, format_changelog_stats_text
 from wicap_assist.daily_report import (
@@ -1117,6 +1118,117 @@ def build_parser() -> argparse.ArgumentParser:
     )
     scheduler_parser.add_argument("--json", action="store_true", dest="as_json", help="Emit JSON output")
 
+    autopilot_parser = subparsers.add_parser(
+        "autopilot",
+        help="Run end-to-end supervisor state machine (preflight/start/operate/verify/promote-or-rollback/report)",
+    )
+    autopilot_parser.add_argument(
+        "--control-mode",
+        choices=("monitor", "observe", "assist", "autonomous"),
+        default="assist",
+        help="Control mode used during operate phase (monitor aliases observe)",
+    )
+    autopilot_parser.add_argument(
+        "--repo-root",
+        type=Path,
+        default=None,
+        help="Override WiCAP repo root (default: auto-detected)",
+    )
+    autopilot_parser.add_argument(
+        "--contract-path",
+        type=Path,
+        default=None,
+        help="Override runtime contract JSON path",
+    )
+    autopilot_parser.add_argument(
+        "--no-require-runtime-contract",
+        action="store_true",
+        help="Do not fail preflight/start when runtime contract check fails",
+    )
+    autopilot_parser.add_argument(
+        "--no-startup",
+        action="store_true",
+        help="Skip startup actions in start phase",
+    )
+    autopilot_parser.add_argument(
+        "--startup-actions",
+        default="compose_up",
+        help="Comma-separated allowlisted startup actions (default: compose_up)",
+    )
+    autopilot_parser.add_argument(
+        "--operate-cycles",
+        type=int,
+        default=6,
+        help="Number of once-cycles to execute during operate phase",
+    )
+    autopilot_parser.add_argument(
+        "--operate-interval-seconds",
+        type=float,
+        default=5.0,
+        help="Observation interval for each operate/start cycle",
+    )
+    autopilot_parser.add_argument(
+        "--stop-on-escalation",
+        action="store_true",
+        help="Treat escalation as immediate operate failure",
+    )
+    autopilot_parser.add_argument(
+        "--verify-replay",
+        action="store_true",
+        help="Require replay certification pass in verify phase",
+    )
+    autopilot_parser.add_argument(
+        "--verify-chaos",
+        action="store_true",
+        help="Require chaos certification pass in verify phase",
+    )
+    autopilot_parser.add_argument(
+        "--profile",
+        default="default",
+        help="Certification profile for replay/chaos verify steps",
+    )
+    autopilot_parser.add_argument(
+        "--gate-history-file",
+        type=Path,
+        default=Path("data/reports/rollout_gates_history.jsonl"),
+        help="Rollout gate history JSONL used for promotion readiness",
+    )
+    autopilot_parser.add_argument(
+        "--required-consecutive-passes",
+        type=int,
+        default=2,
+        help="Consecutive rollout-gate passes required before promotion decision",
+    )
+    autopilot_parser.add_argument(
+        "--no-rollback-on-verify-failure",
+        action="store_true",
+        help="Disable rollback phase when verify fails",
+    )
+    autopilot_parser.add_argument(
+        "--rollback-actions",
+        default="shutdown,compose_up",
+        help="Comma-separated allowlisted rollback actions",
+    )
+    autopilot_parser.add_argument(
+        "--report-path",
+        type=Path,
+        default=Path("data/reports/autopilot_latest.json"),
+        help="Write latest autopilot summary report to this path",
+    )
+    autopilot_parser.add_argument(
+        "--max-runs",
+        type=int,
+        default=1,
+        help="Number of supervisor runs to execute (0 means unbounded)",
+    )
+    autopilot_parser.add_argument(
+        "--pause-seconds-between-runs",
+        type=float,
+        default=10.0,
+        help="Pause between supervisor runs when max-runs > 1 or unbounded",
+    )
+    autopilot_parser.add_argument("--json", action="store_true", dest="as_json", help="Emit JSON output")
+
     rollout_parser = subparsers.add_parser(
         "rollout-gates",
         help="Evaluate deterministic autonomous rollout/canary promotion gates",
@@ -1692,6 +1804,62 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             print(f"State path: {report['state_path']}")
         return 0
+
+    if args.command == "autopilot":
+        conn = connect_db(db_path)
+        try:
+            report = run_autopilot_supervisor(
+                conn,
+                mode=_normalize_control_mode(str(args.control_mode)),
+                repo_root=Path(args.repo_root) if args.repo_root is not None else None,
+                contract_path=Path(args.contract_path) if args.contract_path is not None else None,
+                require_runtime_contract=not bool(args.no_require_runtime_contract),
+                startup_actions=tuple(
+                    item.strip().lower()
+                    for item in str(args.startup_actions).split(",")
+                    if item.strip()
+                )
+                or ("compose_up",),
+                perform_startup=not bool(args.no_startup),
+                operate_cycles=max(1, int(args.operate_cycles)),
+                operate_interval_seconds=max(0.1, float(args.operate_interval_seconds)),
+                stop_on_escalation=bool(args.stop_on_escalation),
+                verify_replay=bool(args.verify_replay),
+                verify_chaos=bool(args.verify_chaos),
+                certification_profile=str(args.profile),
+                gate_history_file=Path(args.gate_history_file),
+                required_consecutive_passes=max(1, int(args.required_consecutive_passes)),
+                rollback_on_verify_failure=not bool(args.no_rollback_on_verify_failure),
+                rollback_actions=tuple(
+                    item.strip().lower()
+                    for item in str(args.rollback_actions).split(",")
+                    if item.strip()
+                )
+                or ("shutdown", "compose_up"),
+                report_path=Path(args.report_path) if args.report_path is not None else None,
+                max_runs=int(args.max_runs),
+                pause_seconds_between_runs=max(0.1, float(args.pause_seconds_between_runs)),
+            )
+        finally:
+            conn.close()
+        latest = report.get("latest", {}) if isinstance(report, dict) else {}
+        latest_status = str(latest.get("status", "")).strip().lower() if isinstance(latest, dict) else ""
+        if args.as_json:
+            import json as _json
+
+            print(_json.dumps(report, sort_keys=True))
+        else:
+            print(
+                "Autopilot: "
+                f"runs={report.get('run_count')} "
+                f"latest_status={latest.get('status')} "
+                f"decision={latest.get('promotion_decision')} "
+                f"run_id={latest.get('run_id')}"
+            )
+            report_path = latest.get("report_path")
+            if report_path:
+                print(f"Report written: {report_path}")
+        return 0 if latest_status in {"promoted", "hold", "rolled_back", "completed"} else 2
 
     if args.command == "rollout-gates":
         conn = connect_db(db_path)

@@ -363,6 +363,28 @@ CREATE TABLE IF NOT EXISTS certification_runs (
     detail_json TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS autopilot_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL UNIQUE,
+    ts_started TEXT NOT NULL,
+    ts_ended TEXT,
+    mode TEXT NOT NULL,
+    status TEXT NOT NULL,
+    config_json TEXT NOT NULL,
+    summary_json TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS autopilot_steps (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    autopilot_run_id INTEGER NOT NULL,
+    phase TEXT NOT NULL,
+    ts_started TEXT NOT NULL,
+    ts_ended TEXT,
+    status TEXT NOT NULL,
+    detail_json TEXT NOT NULL,
+    FOREIGN KEY(autopilot_run_id) REFERENCES autopilot_runs(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS schema_migrations (
     version INTEGER PRIMARY KEY,
     name TEXT NOT NULL,
@@ -596,6 +618,34 @@ _MIGRATIONS: tuple[tuple[int, str, tuple[str, ...]], ...] = (
             "CREATE INDEX IF NOT EXISTS idx_mission_runs_started_status ON mission_runs(ts_started, status)",
             "CREATE INDEX IF NOT EXISTS idx_mission_steps_run_ts ON mission_steps(mission_run_id, ts)",
             "CREATE INDEX IF NOT EXISTS idx_certification_runs_ts_type ON certification_runs(ts, cert_type)",
+        ),
+    ),
+    (
+        6,
+        "autopilot_supervisor_tables",
+        (
+            "CREATE TABLE IF NOT EXISTS autopilot_runs ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            "run_id TEXT NOT NULL UNIQUE,"
+            "ts_started TEXT NOT NULL,"
+            "ts_ended TEXT,"
+            "mode TEXT NOT NULL,"
+            "status TEXT NOT NULL,"
+            "config_json TEXT NOT NULL,"
+            "summary_json TEXT NOT NULL"
+            ")",
+            "CREATE TABLE IF NOT EXISTS autopilot_steps ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            "autopilot_run_id INTEGER NOT NULL,"
+            "phase TEXT NOT NULL,"
+            "ts_started TEXT NOT NULL,"
+            "ts_ended TEXT,"
+            "status TEXT NOT NULL,"
+            "detail_json TEXT NOT NULL,"
+            "FOREIGN KEY(autopilot_run_id) REFERENCES autopilot_runs(id) ON DELETE CASCADE"
+            ")",
+            "CREATE INDEX IF NOT EXISTS idx_autopilot_runs_started_status ON autopilot_runs(ts_started, status)",
+            "CREATE INDEX IF NOT EXISTS idx_autopilot_steps_run_phase ON autopilot_steps(autopilot_run_id, phase)",
         ),
     ),
 )
@@ -2120,3 +2170,172 @@ def list_recent_certification_runs(
         """,
         (*args, max(1, int(limit))),
     ).fetchall()
+
+
+def insert_autopilot_run(
+    conn: sqlite3.Connection,
+    *,
+    run_id: str,
+    ts_started: str,
+    mode: str,
+    status: str,
+    config_json: dict[str, Any] | None = None,
+    summary_json: dict[str, Any] | None = None,
+) -> int:
+    """Insert one autopilot supervisor run row."""
+    cur = conn.execute(
+        """
+        INSERT INTO autopilot_runs(run_id, ts_started, ts_ended, mode, status, config_json, summary_json)
+        VALUES(?, ?, NULL, ?, ?, ?, ?)
+        """,
+        (
+            str(run_id).strip(),
+            str(ts_started),
+            str(mode).strip(),
+            str(status).strip(),
+            json.dumps(config_json or {}, sort_keys=True),
+            json.dumps(summary_json or {}, sort_keys=True),
+        ),
+    )
+    if cur.lastrowid is None:
+        raise RuntimeError("Failed to insert autopilot run row")
+    return int(cur.lastrowid)
+
+
+def update_autopilot_run(
+    conn: sqlite3.Connection,
+    *,
+    autopilot_run_id: int,
+    status: str | None = None,
+    ts_ended: str | None = None,
+    summary_json: dict[str, Any] | None = None,
+) -> None:
+    """Update status/summary for one autopilot run."""
+    row = conn.execute(
+        "SELECT status, ts_ended, summary_json FROM autopilot_runs WHERE id = ?",
+        (int(autopilot_run_id),),
+    ).fetchone()
+    if row is None:
+        raise RuntimeError(f"Unknown autopilot run id: {autopilot_run_id}")
+
+    existing_summary: dict[str, Any] = {}
+    raw_summary = row["summary_json"]
+    if isinstance(raw_summary, str) and raw_summary.strip():
+        try:
+            parsed = json.loads(raw_summary)
+        except json.JSONDecodeError:
+            parsed = {}
+        if isinstance(parsed, dict):
+            existing_summary = parsed
+    if isinstance(summary_json, dict):
+        existing_summary.update(summary_json)
+
+    conn.execute(
+        """
+        UPDATE autopilot_runs
+        SET status = ?, ts_ended = ?, summary_json = ?
+        WHERE id = ?
+        """,
+        (
+            str(status).strip() if status is not None else str(row["status"]),
+            str(ts_ended).strip() if ts_ended is not None else row["ts_ended"],
+            json.dumps(existing_summary, sort_keys=True),
+            int(autopilot_run_id),
+        ),
+    )
+
+
+def insert_autopilot_step(
+    conn: sqlite3.Connection,
+    *,
+    autopilot_run_id: int,
+    phase: str,
+    ts_started: str,
+    status: str,
+    detail_json: dict[str, Any] | None = None,
+) -> int:
+    """Insert one autopilot phase step row."""
+    cur = conn.execute(
+        """
+        INSERT INTO autopilot_steps(autopilot_run_id, phase, ts_started, ts_ended, status, detail_json)
+        VALUES(?, ?, ?, NULL, ?, ?)
+        """,
+        (
+            int(autopilot_run_id),
+            str(phase).strip(),
+            str(ts_started),
+            str(status).strip(),
+            json.dumps(detail_json or {}, sort_keys=True),
+        ),
+    )
+    if cur.lastrowid is None:
+        raise RuntimeError("Failed to insert autopilot step row")
+    return int(cur.lastrowid)
+
+
+def update_autopilot_step(
+    conn: sqlite3.Connection,
+    *,
+    autopilot_step_id: int,
+    status: str | None = None,
+    ts_ended: str | None = None,
+    detail_json: dict[str, Any] | None = None,
+) -> None:
+    """Update one autopilot phase step row."""
+    row = conn.execute(
+        "SELECT status, ts_ended, detail_json FROM autopilot_steps WHERE id = ?",
+        (int(autopilot_step_id),),
+    ).fetchone()
+    if row is None:
+        raise RuntimeError(f"Unknown autopilot step id: {autopilot_step_id}")
+
+    existing_detail: dict[str, Any] = {}
+    raw_detail = row["detail_json"]
+    if isinstance(raw_detail, str) and raw_detail.strip():
+        try:
+            parsed = json.loads(raw_detail)
+        except json.JSONDecodeError:
+            parsed = {}
+        if isinstance(parsed, dict):
+            existing_detail = parsed
+    if isinstance(detail_json, dict):
+        existing_detail.update(detail_json)
+
+    conn.execute(
+        """
+        UPDATE autopilot_steps
+        SET status = ?, ts_ended = ?, detail_json = ?
+        WHERE id = ?
+        """,
+        (
+            str(status).strip() if status is not None else str(row["status"]),
+            str(ts_ended).strip() if ts_ended is not None else row["ts_ended"],
+            json.dumps(existing_detail, sort_keys=True),
+            int(autopilot_step_id),
+        ),
+    )
+
+
+def list_autopilot_steps(conn: sqlite3.Connection, autopilot_run_id: int) -> list[sqlite3.Row]:
+    """Return autopilot phase steps for one run in insertion order."""
+    return conn.execute(
+        """
+        SELECT id, phase, ts_started, ts_ended, status, detail_json
+        FROM autopilot_steps
+        WHERE autopilot_run_id = ?
+        ORDER BY id ASC
+        """,
+        (int(autopilot_run_id),),
+    ).fetchall()
+
+
+def fetch_autopilot_run(conn: sqlite3.Connection, run_id: str) -> sqlite3.Row | None:
+    """Fetch one autopilot run row by external run id."""
+    return conn.execute(
+        """
+        SELECT id, run_id, ts_started, ts_ended, mode, status, config_json, summary_json
+        FROM autopilot_runs
+        WHERE run_id = ?
+        """,
+        (str(run_id).strip(),),
+    ).fetchone()

@@ -62,6 +62,7 @@ Define the deterministic checks that must pass before release freezes or major c
 2. `PYTHONPATH=src python -m wicap_assist.cli confidence-audit --limit 100`
 3. Confirm `docs/ASSISTANT_MISSION.md`, `docs/ASSISTANT_ROADMAP.md`, and `docs/HANDOFF_PLAN.md` reflect current status.
 4. Confirm README command reference has no drift from parser commands.
+5. Validate autopilot supervisor health path: `PYTHONPATH=src python -m wicap_assist.cli autopilot --operate-cycles 1 --max-runs 1 --json`.
 
 ## Non-goal Reminder
 Quality gates are for stabilization and trust hardening. They are not a place to introduce new product features or ingestion scope.

@@ -74,6 +74,33 @@ services:
       ]
     restart: unless-stopped
 
+  wicap-assist-autopilot:
+    profiles: ["autopilot"]
+    build: .
+    network_mode: host
+    environment:
+      - WICAP_REPO_ROOT=/wicap
+    volumes:
+      - ./data:/app/data
+      - ${WICAP_HOST_REPO_ROOT:-../wicap}:/wicap
+      - /var/run/docker.sock:/var/run/docker.sock
+    command:
+      [
+        "autopilot",
+        "--control-mode",
+        "${WICAP_ASSIST_AUTOPILOT_MODE:-assist}",
+        "--operate-cycles",
+        "6",
+        "--operate-interval-seconds",
+        "5",
+        "--stop-on-escalation",
+        "--max-runs",
+        "0",
+        "--pause-seconds-between-runs",
+        "10",
+      ]
+    restart: unless-stopped
+
   redis:
     image: redis:7-alpine
     profiles: ["hybrid"]

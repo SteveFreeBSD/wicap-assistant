@@ -253,3 +253,49 @@ def test_agent_replay_and_chaos_certify_commands(tmp_path: Path) -> None:
     chaos_rc = cli_mod.main(["--db", str(db_path), "agent", "chaos-certify", "--profile", "test"])
     assert replay_rc in {0, 2}
     assert chaos_rc in {0, 2}
+
+
+def test_autopilot_command_json(monkeypatch, tmp_path: Path, capsys) -> None:
+    db_path = tmp_path / "assistant.db"
+
+    def fake_autopilot(conn, **kwargs):  # type: ignore[no-untyped-def]
+        _ = conn
+        _ = kwargs
+        return {
+            "run_count": 1,
+            "runs": [],
+            "latest": {
+                "run_id": "autopilot-test-1",
+                "status": "hold",
+                "promotion_decision": "hold",
+                "report_path": "data/reports/autopilot_latest.json",
+            },
+        }
+
+    monkeypatch.setattr(cli_mod, "run_autopilot_supervisor", fake_autopilot)
+    rc = cli_mod.main(["--db", str(db_path), "autopilot", "--json"])
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out.strip())
+    assert payload["latest"]["status"] == "hold"
+
+
+def test_autopilot_command_returns_non_zero_for_failure(monkeypatch, tmp_path: Path) -> None:
+    db_path = tmp_path / "assistant.db"
+
+    def fake_autopilot(conn, **kwargs):  # type: ignore[no-untyped-def]
+        _ = conn
+        _ = kwargs
+        return {
+            "run_count": 1,
+            "runs": [],
+            "latest": {
+                "run_id": "autopilot-test-2",
+                "status": "failed_verify",
+                "promotion_decision": "rollback",
+                "report_path": "data/reports/autopilot_latest.json",
+            },
+        }
+
+    monkeypatch.setattr(cli_mod, "run_autopilot_supervisor", fake_autopilot)
+    rc = cli_mod.main(["--db", str(db_path), "autopilot"])
+    assert rc == 2
