@@ -33,7 +33,10 @@ def test_comprehensive_sweep_wires_expected_substeps() -> None:
     assert "scripts/live_testing_gate.sh" in content
     assert "--no-enforce-contract" in content
     assert "--enforce --json" in content
+    assert "--operate-interval-seconds" in content
     assert "--no-rollback-on-verify-failure" in content
     assert "--stop-on-escalation" not in content
+    assert "strict retry mode adjusted to '" in content
+    assert "shadow sample deficit=" in content
     assert "python3 -m wicap_assist.cli --db" in content
     assert "autopilot --control-mode" in content

@@ -14,6 +14,7 @@ Options:
   --output-dir PATH            Sweep output root (default: <assistant-root>/data/reports/sweeps)
   --autopilot-mode MODE        monitor|observe|assist|autonomous (default: autonomous)
   --operate-cycles N           Autopilot operate cycles for sweep run (default: 220)
+  --operate-interval-seconds N Observation interval for autopilot operate cycles (default: 1.0)
   --ui-timeout-seconds N       Wait budget for http://127.0.0.1:8080/health (default: 180)
   --max-gate-retries N         Extra autopilot warmup+gate retries in strict mode (default: 2)
   --with-scout                 Start scout service during bootstrap/smoke
@@ -34,6 +35,7 @@ ASSIST_DB="${ASSIST_DB:-${ASSIST_ROOT}/data/assistant.db}"
 OUTPUT_DIR="${OUTPUT_DIR:-${ASSIST_ROOT}/data/reports/sweeps}"
 AUTOPILOT_MODE="${AUTOPILOT_MODE:-autonomous}"
 OPERATE_CYCLES=220
+OPERATE_INTERVAL_SECONDS=1.0
 UI_TIMEOUT_SECONDS=180
 MAX_GATE_RETRIES=2
 WITH_SCOUT=0
@@ -63,6 +65,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --operate-cycles)
             OPERATE_CYCLES="${2:-}"
+            shift 2
+            ;;
+        --operate-interval-seconds)
+            OPERATE_INTERVAL_SECONDS="${2:-}"
             shift 2
             ;;
         --ui-timeout-seconds)
@@ -119,6 +125,10 @@ esac
 
 if ! [[ "${OPERATE_CYCLES}" =~ ^[0-9]+$ ]] || [[ "${OPERATE_CYCLES}" -lt 1 ]]; then
     echo "ERROR: --operate-cycles must be an integer >= 1" >&2
+    exit 2
+fi
+if ! [[ "${OPERATE_INTERVAL_SECONDS}" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+    echo "ERROR: --operate-interval-seconds must be a positive number" >&2
     exit 2
 fi
 if ! [[ "${UI_TIMEOUT_SECONDS}" =~ ^[0-9]+$ ]] || [[ "${UI_TIMEOUT_SECONDS}" -lt 1 ]]; then
@@ -186,6 +196,7 @@ echo "[info] assistant_db=${ASSIST_DB}"
 echo "[info] run_dir=${RUN_DIR}"
 echo "[info] ui_timeout_seconds=${UI_TIMEOUT_SECONDS}"
 echo "[info] max_gate_retries=${MAX_GATE_RETRIES}"
+echo "[info] operate_interval_seconds=${OPERATE_INTERVAL_SECONDS}"
 
 record_step() {
     local name="$1"
@@ -234,6 +245,26 @@ run_json_step() {
 latest_step_rc() {
     local name="$1"
     awk -F '\t' -v step="${name}" '$1==step {print $2}' "${STEP_FILE}" | tail -n1
+}
+
+shadow_gate_sample_tuple() {
+    local path="$1"
+    python3 - "${path}" <<'PY'
+import json
+import sys
+
+path = str(sys.argv[1]).strip()
+try:
+    payload = json.loads(open(path, encoding="utf-8").read())
+except Exception:
+    print("0 0")
+    raise SystemExit(0)
+gates = payload.get("gates", {}) if isinstance(payload, dict) else {}
+shadow = gates.get("shadow_quality", {}) if isinstance(gates, dict) else {}
+samples = int(shadow.get("samples", 0) or 0)
+minimum = int(shadow.get("min_samples", 0) or 0)
+print(f"{samples} {minimum}")
+PY
 }
 
 if [[ "${DO_BOOTSTRAP}" -eq 1 ]]; then
@@ -292,7 +323,7 @@ docker compose ps >&2 || true
 exit 1
 "
 
-run_json_step "autopilot_once" bash -lc "cd \"${ASSIST_ROOT}\" && PYTHONPATH=src python3 -m wicap_assist.cli --db \"${ASSIST_DB}\" autopilot --control-mode \"${AUTOPILOT_MODE}\" --operate-cycles \"${OPERATE_CYCLES}\" --no-rollback-on-verify-failure --max-runs 1 --json" || true
+run_json_step "autopilot_once" bash -lc "cd \"${ASSIST_ROOT}\" && PYTHONPATH=src python3 -m wicap_assist.cli --db \"${ASSIST_DB}\" autopilot --control-mode \"${AUTOPILOT_MODE}\" --operate-cycles \"${OPERATE_CYCLES}\" --operate-interval-seconds \"${OPERATE_INTERVAL_SECONDS}\" --no-rollback-on-verify-failure --max-runs 1 --json" || true
 run_json_step "rollout_gates_pass1" bash -lc "cd \"${ASSIST_ROOT}\" && PYTHONPATH=src python3 -m wicap_assist.cli --db \"${ASSIST_DB}\" rollout-gates --json" || true
 if [[ "${STRICT}" -eq 1 ]]; then
     run_json_step "rollout_gates_pass2" bash -lc "cd \"${ASSIST_ROOT}\" && PYTHONPATH=src python3 -m wicap_assist.cli --db \"${ASSIST_DB}\" rollout-gates --enforce --json" || true
@@ -303,11 +334,29 @@ fi
 FINAL_GATE_STEP="rollout_gates_pass2"
 FINAL_AUTOPILOT_STEP="autopilot_once"
 if [[ "${STRICT}" -eq 1 ]]; then
+    retry_mode="${AUTOPILOT_MODE}"
+    if [[ "${retry_mode}" == "monitor" || "${retry_mode}" == "observe" ]]; then
+        retry_mode="assist"
+        echo "[info] strict retry mode adjusted to '${retry_mode}' for shadow sample warmup"
+    fi
     gate_rc="$(latest_step_rc "${FINAL_GATE_STEP}")"
     if [[ -n "${gate_rc}" && "${gate_rc}" -ne 0 && "${MAX_GATE_RETRIES}" -gt 0 ]]; then
         for retry in $(seq 1 "${MAX_GATE_RETRIES}"); do
+            retry_cycles="${OPERATE_CYCLES}"
+            prior_gate_json="${RUN_DIR}/${FINAL_GATE_STEP}.json"
+            if [[ -f "${prior_gate_json}" ]]; then
+                read -r shadow_samples shadow_min_samples < <(shadow_gate_sample_tuple "${prior_gate_json}")
+                if [[ "${shadow_min_samples}" -gt 0 && "${shadow_samples}" -lt "${shadow_min_samples}" ]]; then
+                    shadow_deficit=$((shadow_min_samples - shadow_samples))
+                    target_cycles=$((shadow_deficit + 10))
+                    if [[ "${target_cycles}" -gt "${retry_cycles}" ]]; then
+                        retry_cycles="${target_cycles}"
+                    fi
+                    echo "[info] shadow sample deficit=${shadow_deficit}; retry operate_cycles=${retry_cycles}"
+                fi
+            fi
             FINAL_AUTOPILOT_STEP="autopilot_retry${retry}"
-            run_json_step "${FINAL_AUTOPILOT_STEP}" bash -lc "cd \"${ASSIST_ROOT}\" && PYTHONPATH=src python3 -m wicap_assist.cli --db \"${ASSIST_DB}\" autopilot --control-mode \"${AUTOPILOT_MODE}\" --operate-cycles \"${OPERATE_CYCLES}\" --no-rollback-on-verify-failure --max-runs 1 --json" || true
+            run_json_step "${FINAL_AUTOPILOT_STEP}" bash -lc "cd \"${ASSIST_ROOT}\" && PYTHONPATH=src python3 -m wicap_assist.cli --db \"${ASSIST_DB}\" autopilot --control-mode \"${retry_mode}\" --operate-cycles \"${retry_cycles}\" --operate-interval-seconds \"${OPERATE_INTERVAL_SECONDS}\" --no-rollback-on-verify-failure --max-runs 1 --json" || true
             FINAL_GATE_STEP="rollout_gates_retry${retry}"
             run_json_step "${FINAL_GATE_STEP}" bash -lc "cd \"${ASSIST_ROOT}\" && PYTHONPATH=src python3 -m wicap_assist.cli --db \"${ASSIST_DB}\" rollout-gates --enforce --json" || true
             gate_rc="$(latest_step_rc "${FINAL_GATE_STEP}")"
