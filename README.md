@@ -112,6 +112,11 @@ Run with explicit mode or capture:
 cd /opt/wicap-assistant
 ./scripts/autopilot_bootstrap.sh --autopilot-mode autonomous --with-scout
 ```
+One-command comprehensive sweep (bootstrap + smoke + gates + autopilot + snapshots):
+```bash
+cd /opt/wicap-assistant
+./scripts/comprehensive_sweep.sh --strict --run-certifications
+```
 Optional strict mode with capture + enforced gates:
 ```bash
 cd /opt/wicap-assistant

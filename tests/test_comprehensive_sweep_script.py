@@ -1,0 +1,31 @@
+from __future__ import annotations
+
+import subprocess
+from pathlib import Path
+
+
+def test_comprehensive_sweep_help() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    script = repo_root / "scripts" / "comprehensive_sweep.sh"
+    result = subprocess.run(
+        ["bash", str(script), "--help"],
+        check=False,
+        capture_output=True,
+        text=True,
+        cwd=str(repo_root),
+    )
+    assert result.returncode == 0
+    assert "Comprehensive end-to-end sweep for WiCAP + wicap-assistant." in result.stdout
+    assert "--run-certifications" in result.stdout
+    assert "--strict" in result.stdout
+
+
+def test_comprehensive_sweep_wires_expected_substeps() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    script = repo_root / "scripts" / "comprehensive_sweep.sh"
+    content = script.read_text(encoding="utf-8")
+    assert "scripts/autopilot_bootstrap.sh" in content
+    assert "scripts/server_rollout_smoke.sh" in content
+    assert "scripts/live_testing_gate.sh" in content
+    assert "python3 -m wicap_assist.cli --db" in content
+    assert "autopilot --control-mode" in content
