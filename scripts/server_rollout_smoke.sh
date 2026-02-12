@@ -218,17 +218,17 @@ fi
 
 echo "[step] running assistant checks"
 if [[ "${ENFORCE_CONTRACT}" -eq 1 ]]; then
-    (cd "${ASSIST_ROOT}" && PYTHONPATH=src python -m wicap_assist.cli --db "${ASSIST_DB}" contract-check --enforce)
+    (cd "${ASSIST_ROOT}" && PYTHONPATH=src python3 -m wicap_assist.cli --db "${ASSIST_DB}" contract-check --enforce)
 else
-    (cd "${ASSIST_ROOT}" && PYTHONPATH=src python -m wicap_assist.cli --db "${ASSIST_DB}" contract-check --no-enforce)
+    (cd "${ASSIST_ROOT}" && PYTHONPATH=src python3 -m wicap_assist.cli --db "${ASSIST_DB}" contract-check --no-enforce)
 fi
 
 assistant_rollout_payload="$(mktemp)"
 trap 'rm -f "${health_payload}" "${gate_payload}" "${assistant_rollout_payload}"' EXIT
-(cd "${ASSIST_ROOT}" && PYTHONPATH=src python -m wicap_assist.cli --db "${ASSIST_DB}" rollout-gates --json >"${assistant_rollout_payload}")
+(cd "${ASSIST_ROOT}" && PYTHONPATH=src python3 -m wicap_assist.cli --db "${ASSIST_DB}" rollout-gates --json >"${assistant_rollout_payload}")
 python3 -m json.tool "${assistant_rollout_payload}"
 
-(cd "${ASSIST_ROOT}" && PYTHONPATH=src python -m wicap_assist.cli --db "${ASSIST_DB}" agent failover-state --json | python3 -m json.tool)
-(cd "${ASSIST_ROOT}" && PYTHONPATH=src python -m wicap_assist.cli --db "${ASSIST_DB}" agent sandbox-explain --action status_check --mode observe --json | python3 -m json.tool)
+(cd "${ASSIST_ROOT}" && PYTHONPATH=src python3 -m wicap_assist.cli --db "${ASSIST_DB}" agent failover-state --json | python3 -m json.tool)
+(cd "${ASSIST_ROOT}" && PYTHONPATH=src python3 -m wicap_assist.cli --db "${ASSIST_DB}" agent sandbox-explain --action status_check --mode observe --json | python3 -m json.tool)
 
 echo "[pass] server rollout smoke completed."

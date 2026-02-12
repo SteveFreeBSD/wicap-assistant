@@ -18,3 +18,11 @@ def test_server_rollout_smoke_help() -> None:
     assert "SSH-safe cross-repo rollout smoke" in result.stdout
     assert "--with-scout" in result.stdout
     assert "--enforce-contract" in result.stdout
+
+
+def test_server_rollout_smoke_uses_python3_for_assistant_cli() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    script = repo_root / "scripts" / "server_rollout_smoke.sh"
+    content = script.read_text(encoding="utf-8")
+    assert "python -m wicap_assist.cli" not in content
+    assert "python3 -m wicap_assist.cli" in content
