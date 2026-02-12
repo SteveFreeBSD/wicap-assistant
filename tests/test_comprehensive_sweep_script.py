@@ -32,5 +32,6 @@ def test_comprehensive_sweep_wires_expected_substeps() -> None:
     assert "scripts/server_rollout_smoke.sh" in content
     assert "scripts/live_testing_gate.sh" in content
     assert "--no-enforce-contract" in content
+    assert "--enforce --json" in content
     assert "python3 -m wicap_assist.cli --db" in content
     assert "autopilot --control-mode" in content
