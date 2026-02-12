@@ -102,6 +102,16 @@ SSH-safe rollout smoke (no `jq`, waits for health, `scout` is opt-in):
 cd /opt/wicap-assistant
 ./scripts/server_rollout_smoke.sh
 ```
+One-command clean-boot bootstrap (WiCAP core + assistant autopilot):
+```bash
+cd /opt/wicap-assistant
+./scripts/autopilot_bootstrap.sh
+```
+Run with explicit mode or capture:
+```bash
+cd /opt/wicap-assistant
+./scripts/autopilot_bootstrap.sh --autopilot-mode autonomous --with-scout
+```
 Optional strict mode with capture + enforced gates:
 ```bash
 cd /opt/wicap-assistant
