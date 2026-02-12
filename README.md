@@ -117,7 +117,12 @@ Interactive agent console:
 ```bash
 wicap-assist agent --control-mode assist
 ```
-The console supports prompts like `status`, `start soak for 10 minutes assist`, `recommend <target>`, `incident <target>`.
+The console supports prompts like:
+- `status` or `stats` (command-center snapshot with control/memory metrics)
+- `mode assist` / `mode autonomous`
+- `action status_check` / `action compose_up` / `action restart_service:wicap-ui`
+- `start soak for 10 minutes assist`
+- `recommend <target>`, `incident <target>`
 
 ## Docker Sidecar (Optional)
 Build/run with compose:

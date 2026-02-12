@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from wicap_assist.actuators import ActuatorResult
 from wicap_assist.agent_console import parse_agent_prompt, run_agent_console
 from wicap_assist.db import connect_db, insert_control_session
 
@@ -20,6 +21,22 @@ def test_parse_agent_prompt_soak_autonomous() -> None:
     assert intent.kind == "soak"
     assert int(intent.duration_minutes or 0) == 30
     assert intent.control_mode == "autonomous"
+
+
+def test_parse_agent_prompt_supports_mode_action_and_stats() -> None:
+    assert parse_agent_prompt("stats").kind == "stats"
+
+    mode_intent = parse_agent_prompt("mode assist")
+    assert mode_intent.kind == "set_mode"
+    assert mode_intent.control_mode == "assist"
+
+    action_intent = parse_agent_prompt("action restart_service:wicap-ui")
+    assert action_intent.kind == "action"
+    assert action_intent.action == "restart_service:wicap-ui"
+
+    restart_intent = parse_agent_prompt("restart wicap-processor")
+    assert restart_intent.kind == "action"
+    assert restart_intent.action == "restart_service:wicap-processor"
 
 
 def test_run_agent_console_routes_core_intents(tmp_path: Path) -> None:
@@ -151,4 +168,73 @@ def test_run_agent_console_recommend_uses_working_memory_target(tmp_path: Path) 
     assert rc == 0
     assert recommend_calls == ["error: redis timeout on reconnect"]
     assert any("recommend: confidence=0.8" in line for line in outputs)
+    conn.close()
+
+
+def test_run_agent_console_mode_action_and_stats(tmp_path: Path, monkeypatch) -> None:
+    conn = connect_db(tmp_path / "assistant.db")
+    outputs: list[str] = []
+    prompts = iter(["mode assist", "action status_check", "stats", "quit"])
+
+    def input_fn(_prompt: str) -> str:
+        return next(prompts)
+
+    def output_fn(line: str) -> None:
+        outputs.append(str(line))
+
+    def fake_live_once(_conn):  # type: ignore[no-untyped-def]
+        return "LIVE_OK"
+
+    def fake_run_allowlisted_action(**kwargs):  # type: ignore[no-untyped-def]
+        _ = kwargs
+        return ActuatorResult(
+            status="executed_ok",
+            commands=[["python", "scripts/check_wicap_status.py", "--local-only", "--json"]],
+            detail="ok",
+        )
+
+    def fake_collect_live_cycle(_conn):  # type: ignore[no-untyped-def]
+        return {
+            "ts": "2026-02-12T00:00:00+00:00",
+            "service_status": {
+                "docker": {
+                    "services": {
+                        "wicap-ui": {"state": "up", "status": "Up 1m"},
+                        "wicap-processor": {"state": "up", "status": "Up 1m"},
+                        "wicap-scout": {"state": "down", "status": "Exited (1)"},
+                        "wicap-redis": {"state": "up", "status": "Up 1m"},
+                    }
+                }
+            },
+            "top_signatures": [
+                {"category": "error", "signature": "ui push failed", "count": 3},
+            ],
+            "recommended": [
+                {
+                    "signature": "ui push failed",
+                    "recommendation": {
+                        "recommended_action": "Set WICAP_UI_URL",
+                        "confidence": 0.8,
+                    },
+                    "safe_verify_steps": ["grep -E 'WICAP_UI_URL' .env"],
+                }
+            ],
+            "alert": "services_down=wicap-scout",
+            "operator_guidance": ["Run status check"],
+        }
+
+    monkeypatch.setattr("wicap_assist.agent_console.run_allowlisted_action", fake_run_allowlisted_action)
+    monkeypatch.setattr("wicap_assist.agent_console.collect_live_cycle", fake_collect_live_cycle)
+
+    rc = run_agent_console(
+        conn,
+        input_fn=input_fn,
+        output_fn=output_fn,
+        live_once_fn=fake_live_once,
+    )
+    assert rc == 0
+    assert any("agent: mode set to assist" in line for line in outputs)
+    assert any("action: mode=assist requested=status_check status=executed_ok" in line for line in outputs)
+    assert any("command_center: mode=assist" in line for line in outputs)
+    assert any("working_memory:" in line for line in outputs)
     conn.close()

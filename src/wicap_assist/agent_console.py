@@ -6,11 +6,14 @@ from dataclasses import dataclass
 from pathlib import Path
 import re
 import sqlite3
+import subprocess
 from typing import Any, Callable
 
+from wicap_assist.actuators import ALLOWED_RESTART_SERVICES, run_allowlisted_action
 from wicap_assist.bundle import build_bundle
 from wicap_assist.config import wicap_repo_root
 from wicap_assist.db import insert_live_observation
+from wicap_assist.decision_features import query_prior_action_stats
 from wicap_assist.guardian import (
     GuardianState,
     format_guardian_alert_text,
@@ -31,6 +34,32 @@ _INTERVAL_RE = re.compile(
 )
 
 
+def _normalize_control_mode(value: str) -> str:
+    mode = str(value or "").strip().lower()
+    if mode == "monitor":
+        return "observe"
+    if mode in {"observe", "assist", "autonomous"}:
+        return mode
+    return ""
+
+
+def _extract_action(raw: str) -> str | None:
+    text = str(raw or "").strip()
+    lower = text.lower()
+    if lower.startswith("action "):
+        candidate = text.split(" ", 1)[1].strip()
+        return candidate or None
+    if lower.startswith("restart "):
+        service = text.split(" ", 1)[1].strip().lower()
+        if service:
+            return f"restart_service:{service}"
+    if lower.startswith("restart_service:"):
+        return lower
+    if lower in {"status_check", "compose_up", "shutdown"}:
+        return lower
+    return None
+
+
 @dataclass(slots=True)
 class AgentIntent:
     kind: str
@@ -39,6 +68,7 @@ class AgentIntent:
     playwright_interval_minutes: int | None = None
     dry_run: bool = False
     control_mode: str = "observe"
+    action: str | None = None
 
 
 def parse_agent_prompt(text: str) -> AgentIntent:
@@ -52,6 +82,20 @@ def parse_agent_prompt(text: str) -> AgentIntent:
         return AgentIntent(kind="quit")
     if "help" in lower:
         return AgentIntent(kind="help")
+
+    if lower in {"stats", "dashboard", "command center", "command-center", "center"}:
+        return AgentIntent(kind="stats")
+
+    if lower.startswith("mode ") or lower.startswith("set mode "):
+        raw_mode = raw.split("mode", 1)[1].strip()
+        normalized_mode = _normalize_control_mode(raw_mode)
+        if normalized_mode:
+            return AgentIntent(kind="set_mode", control_mode=normalized_mode)
+        return AgentIntent(kind="unknown")
+
+    action = _extract_action(raw)
+    if action is not None:
+        return AgentIntent(kind="action", action=action)
 
     if "recommend" in lower:
         target = raw.split("recommend", 1)[1].strip() if "recommend" in raw else ""
@@ -194,6 +238,156 @@ def _working_memory_target(conn: sqlite3.Connection) -> str | None:
     return None
 
 
+def _latest_working_memory(conn: sqlite3.Connection) -> dict[str, Any]:
+    row = conn.execute(
+        """
+        SELECT metadata_json
+        FROM control_sessions
+        ORDER BY id DESC
+        LIMIT 1
+        """
+    ).fetchone()
+    if row is None:
+        return {
+            "unresolved_signatures": [],
+            "pending_actions": [],
+            "recent_transitions": [],
+            "down_services": [],
+            "last_observation_ts": None,
+        }
+    return parse_working_memory(row["metadata_json"])
+
+
+def _format_control_history_stats(conn: sqlite3.Connection) -> list[str]:
+    rows = conn.execute(
+        """
+        SELECT action, status
+        FROM episodes
+        WHERE action IS NOT NULL AND trim(action) != ''
+        ORDER BY id DESC
+        LIMIT 200
+        """
+    ).fetchall()
+    if not rows:
+        return ["control_history: (none)"]
+
+    action_counts: dict[str, int] = {}
+    for row in rows:
+        action = str(row["action"] or "").strip()
+        if not action:
+            continue
+        action_counts[action] = action_counts.get(action, 0) + 1
+
+    ranked_actions = sorted(action_counts.items(), key=lambda item: (-item[1], item[0]))[:4]
+    lines = [f"control_history: episodes_sample={len(rows)} actions={len(action_counts)}"]
+    for action, count in ranked_actions:
+        stats = query_prior_action_stats(conn, action)
+        lines.append(
+            "control_history: "
+            f"action={action} n={count} "
+            f"success={stats.get('prior_success')} fail={stats.get('prior_fail')} "
+            f"escalated={stats.get('prior_escalated')} "
+            f"success_rate={stats.get('prior_success_rate')}"
+        )
+    return lines
+
+
+def _format_recent_control_events(conn: sqlite3.Connection, *, limit: int = 5) -> list[str]:
+    rows = conn.execute(
+        """
+        SELECT ts, decision, action, status
+        FROM control_events
+        ORDER BY id DESC
+        LIMIT ?
+        """,
+        (max(1, int(limit)),),
+    ).fetchall()
+    if not rows:
+        return ["recent_control_events: (none)"]
+    lines = ["recent_control_events:"]
+    for row in rows:
+        lines.append(
+            f"- ts={row['ts']} decision={row['decision']} "
+            f"action={row['action']} status={row['status']}"
+        )
+    return lines
+
+
+def _format_command_center_stats(
+    conn: sqlite3.Connection,
+    *,
+    observation: dict[str, Any],
+    mode: str,
+) -> list[str]:
+    lines: list[str] = []
+    status = observation.get("service_status", {})
+    docker = status.get("docker", {}) if isinstance(status, dict) else {}
+    services = docker.get("services", {}) if isinstance(docker, dict) else {}
+    service_states: dict[str, str] = {}
+    if isinstance(services, dict):
+        for name, info in services.items():
+            if not isinstance(info, dict):
+                continue
+            service_states[str(name)] = str(info.get("state", "unknown"))
+
+    up = sorted(name for name, state in service_states.items() if state == "up")
+    down = sorted(name for name, state in service_states.items() if state != "up")
+    lines.append(f"command_center: mode={mode} up={len(up)} down={len(down)}")
+    if down:
+        lines.append(f"command_center: down_services={','.join(down)}")
+
+    top_signatures = observation.get("top_signatures", [])
+    if isinstance(top_signatures, list):
+        lines.append(f"command_center: top_signatures={len(top_signatures)}")
+        for item in top_signatures[:3]:
+            if not isinstance(item, dict):
+                continue
+            lines.append(
+                "signature: "
+                f"[{item.get('category')}] x{item.get('count')} {item.get('signature')}"
+            )
+
+    recommendations = observation.get("recommended", [])
+    if isinstance(recommendations, list) and recommendations:
+        for item in recommendations[:3]:
+            if not isinstance(item, dict):
+                continue
+            payload = item.get("recommendation", {})
+            if not isinstance(payload, dict):
+                continue
+            lines.append(
+                "recommendation: "
+                f"signature={item.get('signature')} "
+                f"action={payload.get('recommended_action')} "
+                f"confidence={payload.get('confidence')}"
+            )
+
+    memory = _latest_working_memory(conn)
+    summary = summarize_working_memory(memory)
+    lines.append(
+        "working_memory: "
+        f"unresolved={summary['unresolved_count']} "
+        f"pending={summary['pending_count']} "
+        f"transitions={summary['transition_count']}"
+    )
+    unresolved = memory.get("unresolved_signatures", [])
+    if isinstance(unresolved, list):
+        for item in unresolved[:3]:
+            value = str(item).strip()
+            if value:
+                lines.append(f"working_memory_unresolved: {value}")
+    pending = memory.get("pending_actions", [])
+    if isinstance(pending, list):
+        for item in pending[:3]:
+            value = str(item).strip()
+            if value:
+                lines.append(f"working_memory_pending: {value}")
+
+    lines.extend(_format_control_history_stats(conn))
+    lines.extend(_format_recent_control_events(conn, limit=5))
+    return lines
+
+
 def run_agent_console(
     conn: sqlite3.Connection,
     *,
@@ -207,8 +401,15 @@ def run_agent_console(
     incident_fn: Callable[[sqlite3.Connection, str], str] | None = None,
 ) -> int:
     """Run interactive deterministic agent console."""
+    current_control_mode = _normalize_control_mode(default_control_mode) or "observe"
+    resolved_repo_root = wicap_repo_root().resolve()
+
     output_fn("WICAP Live Control Agent")
-    output_fn("Type: status | start soak for 10 minutes assist/autonomous | recommend <target> | incident <target> | quit")
+    output_fn(
+        "Type: status|stats|action <status_check|compose_up|shutdown|restart_service:wicap-ui> | "
+        "mode <observe|assist|autonomous> | "
+        "start soak for 10 minutes assist/autonomous | recommend <target> | incident <target> | quit"
+    )
     guardian_state = GuardianState()
     guardian_playbooks = load_playbook_entries()
 
@@ -230,6 +431,7 @@ def run_agent_console(
         )
         local_conn.commit()
         lines = [format_live_panel(observation), f"observation_id={row_id}"]
+        lines.extend(_format_command_center_stats(local_conn, observation=observation, mode=current_control_mode))
         lines.append(_latest_control_session_summary(local_conn))
         lines.append(f"planned_next_action={_planned_next_action(observation)}")
         lines.append(f"guardian_alerts={len(alerts)}")
@@ -265,7 +467,7 @@ def run_agent_console(
             dry_run=bool(intent.dry_run),
             managed_observe=True,
             observe_interval_seconds=float(default_observe_interval_seconds),
-            control_mode=str(intent.control_mode or default_control_mode),
+            control_mode=str(intent.control_mode or current_control_mode),
             progress_hook=progress,
         )
 
@@ -281,6 +483,21 @@ def run_agent_console(
 
     incident_impl = incident_fn or default_incident
 
+    def default_action(local_conn: sqlite3.Connection, *, action: str, mode: str) -> str:
+        result = run_allowlisted_action(
+            action=str(action),
+            mode=str(mode),
+            repo_root=resolved_repo_root,
+            runner=subprocess.run,
+        )
+        command_preview = " ".join(result.commands[0]) if result.commands else "(none)"
+        local_conn.commit()
+        return (
+            f"action: mode={mode} requested={action} status={result.status}\n"
+            f"action: command={command_preview}\n"
+            f"action: detail={result.detail}"
+        )
+
     while True:
         try:
             prompt = input_fn("wicap-agent> ")
@@ -295,18 +512,49 @@ def run_agent_console(
         if intent.kind == "help":
             output_fn("agent help:")
             output_fn("- status")
+            output_fn("- stats (command-center snapshot)")
+            output_fn("- action <status_check|compose_up|shutdown|restart_service:wicap-ui>")
+            output_fn("- mode <observe|assist|autonomous>")
             output_fn("- start soak for 10 minutes assist")
             output_fn("- start soak dry-run")
             output_fn("- recommend <logs_soak_dir|signature>")
             output_fn("- incident <logs_soak_dir|file>")
             output_fn("- quit")
             continue
+        if intent.kind == "set_mode":
+            mode = _normalize_control_mode(intent.control_mode)
+            if not mode:
+                output_fn("agent: invalid mode. use observe|assist|autonomous.")
+                continue
+            current_control_mode = mode
+            output_fn(f"agent: mode set to {current_control_mode}")
+            continue
+        if intent.kind == "stats":
+            observation = collect_live_cycle(conn)
+            lines = _format_command_center_stats(conn, observation=observation, mode=current_control_mode)
+            lines.append(_latest_control_session_summary(conn))
+            for line in lines:
+                output_fn(line)
+            continue
+        if intent.kind == "action":
+            action = str(intent.action or "").strip()
+            if not action:
+                output_fn("agent: action command requires an allowlisted action id.")
+                continue
+            if action.startswith("restart_service:"):
+                service = action.split(":", 1)[1].strip()
+                if service not in ALLOWED_RESTART_SERVICES:
+                    allowed = ",".join(sorted(ALLOWED_RESTART_SERVICES))
+                    output_fn(f"agent: unsupported restart service `{service}`. allowed={allowed}")
+                    continue
+            output_fn(default_action(conn, action=action, mode=current_control_mode))
+            continue
         if intent.kind == "live":
             output_fn(live_once_impl(conn))
             continue
         if intent.kind == "soak":
             if intent.control_mode not in {"observe", "assist", "autonomous"}:
-                intent.control_mode = default_control_mode
+                intent.control_mode = current_control_mode
             summary = soak_run_impl(conn, intent=intent)
             if not intent.dry_run:
                 conn.commit()
