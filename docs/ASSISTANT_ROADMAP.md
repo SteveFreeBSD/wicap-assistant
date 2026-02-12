@@ -85,9 +85,14 @@
 
 ## Phase 13 – Next-Gen Agentic Intelligence (In Progress)
 - Implemented `wicap.anomaly.v2` and `wicap.prediction.v1` cross-repo contract fixtures/parity checks.
+- Implemented seed parity+ contracts `wicap.control.v2`, `wicap.anomaly.v3`, and `wicap.telemetry.v2` with cross-repo fixture coverage.
 - Implemented assistant ingestion + storage for forecast, drift, model-shadow, and proactive-outcome artifacts.
 - Implemented policy explainability snapshot surfaces (`agent explain-policy`) and policy snapshot persistence in live/soak session metadata.
+- Implemented deterministic sandbox policy trace surface (`agent sandbox-explain`) with action/elevated budget state reporting.
+- Implemented failover profile persistence baseline (`failover_events`, `auth_profile_state`) and `agent failover-state` snapshot surface.
 - Implemented command-center and forecast CLI surfaces (`agent control-center`, `agent forecast`) for operator-grade runtime context.
+- Implemented mission graph persistence (`mission_runs`, `mission_steps`) and `agent mission-graph` snapshot surface.
+- Implemented certification scaffolds (`agent replay-certify`, `agent chaos-certify`) with persisted `certification_runs`.
 - Implemented sidecar-intel readiness hooks in status surfaces and contract fixtures for additive rollout-gated adoption.
 
 ## Active Program Plan

@@ -10,6 +10,7 @@ import subprocess
 from typing import Any, Callable
 
 from wicap_assist.actuators import ALLOWED_RESTART_SERVICES, run_allowlisted_action
+from wicap_assist.agent_runtime import orchestrate_role_handoff, validate_role_action
 from wicap_assist.bundle import build_bundle
 from wicap_assist.config import wicap_repo_root
 from wicap_assist.db import insert_live_observation
@@ -484,16 +485,26 @@ def run_agent_console(
     incident_impl = incident_fn or default_incident
 
     def default_action(local_conn: sqlite3.Connection, *, action: str, mode: str) -> str:
+        role_decision = validate_role_action(role="executor", action=str(action))
+        if not role_decision.allowed:
+            return f"action: rejected role_scope reason={role_decision.reason}"
         result = run_allowlisted_action(
             action=str(action),
             mode=str(mode),
             repo_root=resolved_repo_root,
             runner=subprocess.run,
         )
+        handoff = orchestrate_role_handoff(
+            planner_intent="manual_agent_action",
+            action=str(action),
+            verifier_step="status_check",
+            ts=utc_now_iso(),
+        )
         command_preview = " ".join(result.commands[0]) if result.commands else "(none)"
         local_conn.commit()
         return (
             f"action: mode={mode} requested={action} status={result.status}\n"
+            f"action: handoff_token={handoff.get('handoff_token')}\n"
             f"action: command={command_preview}\n"
             f"action: detail={result.detail}"
         )

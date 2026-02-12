@@ -27,6 +27,7 @@ NETWORK_EVENT_PATTERNS = (
     "captures/wicap_network_events.jsonl",
     "captures/wicap_anomaly_events.jsonl",
     "captures/wicap_anomaly_events_v2.jsonl",
+    "captures/wicap_anomaly_events_v3.jsonl",
     "captures/wicap_anomaly_feedback.jsonl",
     "captures/wicap_predictions.jsonl",
     "captures/suricata_eve_compat.jsonl",
@@ -107,6 +108,14 @@ def _parse_one_record(payload: dict[str, Any], *, file_path: Path, line_number: 
         extra_json["baseline_maturity"] = payload.get("baseline_maturity")
     if "primary_score" in payload:
         extra_json["primary_score"] = payload.get("primary_score")
+    if "fusion_score" in payload:
+        extra_json["fusion_score"] = payload.get("fusion_score")
+    if "predictive_horizon_sec" in payload:
+        extra_json["predictive_horizon_sec"] = payload.get("predictive_horizon_sec")
+    if "route_confidence" in payload:
+        extra_json["route_confidence"] = payload.get("route_confidence")
+    if "drift_guard" in payload:
+        extra_json["drift_guard"] = payload.get("drift_guard")
     if "shadow_scores" in payload:
         extra_json["shadow_scores"] = payload.get("shadow_scores")
     if "model_votes" in payload:

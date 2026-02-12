@@ -92,6 +92,10 @@ def route_for_anomaly(
     category: str,
     attack_type: str | None = None,
     feedback: dict[str, Any] | None = None,
+    fusion_score: float | None = None,
+    predictive_horizon_sec: int | None = None,
+    route_confidence: float | None = None,
+    drift_guard: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     class_id = classify_anomaly_class(signature=signature, category=category, attack_type=attack_type)
     action_ladder = list(_ACTION_LADDERS.get(class_id, _ACTION_LADDERS["generic_network_anomaly"]))
@@ -101,11 +105,21 @@ def route_for_anomaly(
         feedback_payload["confidence_scale"] = 1.0
     if "status" not in feedback_payload:
         feedback_payload["status"] = "insufficient_data"
+    resolved_route_confidence = (
+        float(route_confidence)
+        if route_confidence is not None
+        else float(feedback_payload.get("confidence_scale", 1.0) or 1.0)
+    )
+    resolved_route_confidence = max(0.0, min(1.0, resolved_route_confidence))
     return {
         "class_id": class_id,
         "action_ladder": action_ladder,
         "verification_ladder": verification_ladder,
         "feedback": feedback_payload,
+        "fusion_score": float(fusion_score) if fusion_score is not None else None,
+        "predictive_horizon_sec": int(predictive_horizon_sec) if predictive_horizon_sec is not None else None,
+        "route_confidence": round(float(resolved_route_confidence), 4),
+        "drift_guard": dict(drift_guard) if isinstance(drift_guard, dict) else None,
     }
 
 

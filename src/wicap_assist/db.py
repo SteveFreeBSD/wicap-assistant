@@ -281,6 +281,88 @@ CREATE TABLE IF NOT EXISTS proactive_action_outcomes (
     FOREIGN KEY(control_session_id) REFERENCES control_sessions(id) ON DELETE SET NULL
 );
 
+CREATE TABLE IF NOT EXISTS policy_decisions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts TEXT NOT NULL,
+    control_session_id INTEGER,
+    soak_run_id INTEGER,
+    action TEXT NOT NULL,
+    mode TEXT NOT NULL,
+    allowed INTEGER NOT NULL,
+    denied_by TEXT,
+    reason TEXT,
+    trace_id TEXT,
+    policy_trace_json TEXT NOT NULL,
+    FOREIGN KEY(control_session_id) REFERENCES control_sessions(id) ON DELETE SET NULL,
+    FOREIGN KEY(soak_run_id) REFERENCES soak_runs(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS failover_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts TEXT NOT NULL,
+    control_session_id INTEGER,
+    auth_profile TEXT NOT NULL,
+    attempt INTEGER NOT NULL,
+    failure_class TEXT NOT NULL,
+    cooldown_until TEXT,
+    disabled_until TEXT,
+    detail_json TEXT NOT NULL,
+    FOREIGN KEY(control_session_id) REFERENCES control_sessions(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS auth_profile_state (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    profile TEXT NOT NULL UNIQUE,
+    attempt INTEGER NOT NULL,
+    failure_class TEXT,
+    cooldown_until TEXT,
+    disabled_until TEXT,
+    updated_ts TEXT NOT NULL,
+    state_json TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS memory_compactions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts TEXT NOT NULL,
+    control_session_id INTEGER,
+    compacted_rows INTEGER NOT NULL,
+    summary_json TEXT NOT NULL,
+    FOREIGN KEY(control_session_id) REFERENCES control_sessions(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS mission_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL UNIQUE,
+    ts_started TEXT NOT NULL,
+    ts_ended TEXT,
+    mode TEXT NOT NULL,
+    status TEXT NOT NULL,
+    graph_id TEXT NOT NULL,
+    metadata_json TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS mission_steps (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    mission_run_id INTEGER NOT NULL,
+    ts TEXT NOT NULL,
+    step_id TEXT NOT NULL,
+    step_type TEXT NOT NULL,
+    status TEXT NOT NULL,
+    handoff_token TEXT,
+    detail_json TEXT NOT NULL,
+    FOREIGN KEY(mission_run_id) REFERENCES mission_runs(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS certification_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts TEXT NOT NULL,
+    cert_type TEXT NOT NULL,
+    profile TEXT NOT NULL,
+    pass INTEGER NOT NULL,
+    score REAL NOT NULL,
+    detail_json TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS schema_migrations (
     version INTEGER PRIMARY KEY,
     name TEXT NOT NULL,
@@ -425,6 +507,95 @@ _MIGRATIONS: tuple[tuple[int, str, tuple[str, ...]], ...] = (
             "CREATE INDEX IF NOT EXISTS idx_drift_events_ts_status ON drift_events(ts, status)",
             "CREATE INDEX IF NOT EXISTS idx_model_shadow_metrics_ts_model ON model_shadow_metrics(ts, model_id)",
             "CREATE INDEX IF NOT EXISTS idx_proactive_action_outcomes_session_ts ON proactive_action_outcomes(control_session_id, ts)",
+        ),
+    ),
+    (
+        5,
+        "policy_failover_mission_certification_tables",
+        (
+            "CREATE TABLE IF NOT EXISTS policy_decisions ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            "ts TEXT NOT NULL,"
+            "control_session_id INTEGER,"
+            "soak_run_id INTEGER,"
+            "action TEXT NOT NULL,"
+            "mode TEXT NOT NULL,"
+            "allowed INTEGER NOT NULL,"
+            "denied_by TEXT,"
+            "reason TEXT,"
+            "trace_id TEXT,"
+            "policy_trace_json TEXT NOT NULL,"
+            "FOREIGN KEY(control_session_id) REFERENCES control_sessions(id) ON DELETE SET NULL,"
+            "FOREIGN KEY(soak_run_id) REFERENCES soak_runs(id) ON DELETE SET NULL"
+            ")",
+            "CREATE TABLE IF NOT EXISTS failover_events ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            "ts TEXT NOT NULL,"
+            "control_session_id INTEGER,"
+            "auth_profile TEXT NOT NULL,"
+            "attempt INTEGER NOT NULL,"
+            "failure_class TEXT NOT NULL,"
+            "cooldown_until TEXT,"
+            "disabled_until TEXT,"
+            "detail_json TEXT NOT NULL,"
+            "FOREIGN KEY(control_session_id) REFERENCES control_sessions(id) ON DELETE SET NULL"
+            ")",
+            "CREATE TABLE IF NOT EXISTS auth_profile_state ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            "profile TEXT NOT NULL UNIQUE,"
+            "attempt INTEGER NOT NULL,"
+            "failure_class TEXT,"
+            "cooldown_until TEXT,"
+            "disabled_until TEXT,"
+            "updated_ts TEXT NOT NULL,"
+            "state_json TEXT NOT NULL"
+            ")",
+            "CREATE TABLE IF NOT EXISTS memory_compactions ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            "ts TEXT NOT NULL,"
+            "control_session_id INTEGER,"
+            "compacted_rows INTEGER NOT NULL,"
+            "summary_json TEXT NOT NULL,"
+            "FOREIGN KEY(control_session_id) REFERENCES control_sessions(id) ON DELETE SET NULL"
+            ")",
+            "CREATE TABLE IF NOT EXISTS mission_runs ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            "run_id TEXT NOT NULL UNIQUE,"
+            "ts_started TEXT NOT NULL,"
+            "ts_ended TEXT,"
+            "mode TEXT NOT NULL,"
+            "status TEXT NOT NULL,"
+            "graph_id TEXT NOT NULL,"
+            "metadata_json TEXT NOT NULL"
+            ")",
+            "CREATE TABLE IF NOT EXISTS mission_steps ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            "mission_run_id INTEGER NOT NULL,"
+            "ts TEXT NOT NULL,"
+            "step_id TEXT NOT NULL,"
+            "step_type TEXT NOT NULL,"
+            "status TEXT NOT NULL,"
+            "handoff_token TEXT,"
+            "detail_json TEXT NOT NULL,"
+            "FOREIGN KEY(mission_run_id) REFERENCES mission_runs(id) ON DELETE CASCADE"
+            ")",
+            "CREATE TABLE IF NOT EXISTS certification_runs ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            "ts TEXT NOT NULL,"
+            "cert_type TEXT NOT NULL,"
+            "profile TEXT NOT NULL,"
+            "pass INTEGER NOT NULL,"
+            "score REAL NOT NULL,"
+            "detail_json TEXT NOT NULL"
+            ")",
+            "CREATE INDEX IF NOT EXISTS idx_policy_decisions_ts_mode_allowed ON policy_decisions(ts, mode, allowed)",
+            "CREATE INDEX IF NOT EXISTS idx_policy_decisions_trace_id ON policy_decisions(trace_id)",
+            "CREATE INDEX IF NOT EXISTS idx_failover_events_ts_profile ON failover_events(ts, auth_profile)",
+            "CREATE INDEX IF NOT EXISTS idx_auth_profile_state_updated ON auth_profile_state(updated_ts)",
+            "CREATE INDEX IF NOT EXISTS idx_memory_compactions_ts ON memory_compactions(ts)",
+            "CREATE INDEX IF NOT EXISTS idx_mission_runs_started_status ON mission_runs(ts_started, status)",
+            "CREATE INDEX IF NOT EXISTS idx_mission_steps_run_ts ON mission_steps(mission_run_id, ts)",
+            "CREATE INDEX IF NOT EXISTS idx_certification_runs_ts_type ON certification_runs(ts, cert_type)",
         ),
     ),
 )
@@ -1595,3 +1766,357 @@ def summarize_recent_drift(
         "max_abs_delta": round(float(max_delta), 6),
         "latest": latest,
     }
+
+
+def insert_policy_decision(
+    conn: sqlite3.Connection,
+    *,
+    ts: str,
+    control_session_id: int | None,
+    soak_run_id: int | None,
+    action: str,
+    mode: str,
+    allowed: bool,
+    denied_by: str | None,
+    reason: str | None,
+    trace_id: str | None,
+    policy_trace_json: dict[str, Any] | None = None,
+) -> int:
+    """Insert one policy decision/audit row."""
+    cur = conn.execute(
+        """
+        INSERT INTO policy_decisions(
+            ts, control_session_id, soak_run_id, action, mode, allowed,
+            denied_by, reason, trace_id, policy_trace_json
+        )
+        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            str(ts),
+            int(control_session_id) if control_session_id is not None else None,
+            int(soak_run_id) if soak_run_id is not None else None,
+            str(action).strip(),
+            str(mode).strip(),
+            int(bool(allowed)),
+            str(denied_by).strip() if denied_by is not None else None,
+            str(reason).strip() if reason is not None else None,
+            str(trace_id).strip() if trace_id is not None else None,
+            json.dumps(policy_trace_json or {}, sort_keys=True),
+        ),
+    )
+    if cur.lastrowid is None:
+        raise RuntimeError("Failed to insert policy decision row")
+    return int(cur.lastrowid)
+
+
+def insert_failover_event(
+    conn: sqlite3.Connection,
+    *,
+    ts: str,
+    control_session_id: int | None,
+    auth_profile: str,
+    attempt: int,
+    failure_class: str,
+    cooldown_until: str | None,
+    disabled_until: str | None,
+    detail_json: dict[str, Any] | None = None,
+) -> int:
+    """Insert one failover transition row."""
+    cur = conn.execute(
+        """
+        INSERT INTO failover_events(
+            ts, control_session_id, auth_profile, attempt, failure_class,
+            cooldown_until, disabled_until, detail_json
+        )
+        VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            str(ts),
+            int(control_session_id) if control_session_id is not None else None,
+            str(auth_profile).strip(),
+            int(attempt),
+            str(failure_class).strip(),
+            str(cooldown_until).strip() if cooldown_until is not None else None,
+            str(disabled_until).strip() if disabled_until is not None else None,
+            json.dumps(detail_json or {}, sort_keys=True),
+        ),
+    )
+    if cur.lastrowid is None:
+        raise RuntimeError("Failed to insert failover event row")
+    return int(cur.lastrowid)
+
+
+def upsert_auth_profile_state(
+    conn: sqlite3.Connection,
+    *,
+    profile: str,
+    attempt: int,
+    failure_class: str | None,
+    cooldown_until: str | None,
+    disabled_until: str | None,
+    state_json: dict[str, Any] | None = None,
+    updated_ts: str | None = None,
+) -> None:
+    """Insert or update persisted auth profile state."""
+    conn.execute(
+        """
+        INSERT INTO auth_profile_state(
+            profile, attempt, failure_class, cooldown_until, disabled_until, updated_ts, state_json
+        )
+        VALUES(?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(profile) DO UPDATE SET
+            attempt = excluded.attempt,
+            failure_class = excluded.failure_class,
+            cooldown_until = excluded.cooldown_until,
+            disabled_until = excluded.disabled_until,
+            updated_ts = excluded.updated_ts,
+            state_json = excluded.state_json
+        """,
+        (
+            str(profile).strip(),
+            int(attempt),
+            str(failure_class).strip() if failure_class is not None else None,
+            str(cooldown_until).strip() if cooldown_until is not None else None,
+            str(disabled_until).strip() if disabled_until is not None else None,
+            str(updated_ts or utc_now_iso()),
+            json.dumps(state_json or {}, sort_keys=True),
+        ),
+    )
+
+
+def load_auth_profile_state(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Return persisted auth profile rows sorted by update time."""
+    return conn.execute(
+        """
+        SELECT profile, attempt, failure_class, cooldown_until, disabled_until, updated_ts, state_json
+        FROM auth_profile_state
+        ORDER BY updated_ts DESC, profile ASC
+        """
+    ).fetchall()
+
+
+def latest_failover_event(conn: sqlite3.Connection) -> sqlite3.Row | None:
+    """Return latest failover event row."""
+    return conn.execute(
+        """
+        SELECT ts, control_session_id, auth_profile, attempt, failure_class, cooldown_until, disabled_until, detail_json
+        FROM failover_events
+        ORDER BY id DESC
+        LIMIT 1
+        """
+    ).fetchone()
+
+
+def insert_memory_compaction(
+    conn: sqlite3.Connection,
+    *,
+    ts: str,
+    control_session_id: int | None,
+    compacted_rows: int,
+    summary_json: dict[str, Any] | None = None,
+) -> int:
+    """Insert one memory compaction record."""
+    cur = conn.execute(
+        """
+        INSERT INTO memory_compactions(ts, control_session_id, compacted_rows, summary_json)
+        VALUES(?, ?, ?, ?)
+        """,
+        (
+            str(ts),
+            int(control_session_id) if control_session_id is not None else None,
+            int(compacted_rows),
+            json.dumps(summary_json or {}, sort_keys=True),
+        ),
+    )
+    if cur.lastrowid is None:
+        raise RuntimeError("Failed to insert memory compaction row")
+    return int(cur.lastrowid)
+
+
+def insert_mission_run(
+    conn: sqlite3.Connection,
+    *,
+    run_id: str,
+    ts_started: str,
+    mode: str,
+    status: str,
+    graph_id: str,
+    metadata_json: dict[str, Any] | None = None,
+) -> int:
+    """Insert one mission run row."""
+    cur = conn.execute(
+        """
+        INSERT INTO mission_runs(run_id, ts_started, ts_ended, mode, status, graph_id, metadata_json)
+        VALUES(?, ?, NULL, ?, ?, ?, ?)
+        """,
+        (
+            str(run_id).strip(),
+            str(ts_started),
+            str(mode).strip(),
+            str(status).strip(),
+            str(graph_id).strip(),
+            json.dumps(metadata_json or {}, sort_keys=True),
+        ),
+    )
+    if cur.lastrowid is None:
+        raise RuntimeError("Failed to insert mission run row")
+    return int(cur.lastrowid)
+
+
+def update_mission_run(
+    conn: sqlite3.Connection,
+    *,
+    mission_run_id: int,
+    status: str | None = None,
+    ts_ended: str | None = None,
+    metadata_json: dict[str, Any] | None = None,
+) -> None:
+    """Update status/timestamps for one mission run."""
+    row = conn.execute(
+        "SELECT status, ts_ended, metadata_json FROM mission_runs WHERE id = ?",
+        (int(mission_run_id),),
+    ).fetchone()
+    if row is None:
+        raise RuntimeError(f"Unknown mission run id: {mission_run_id}")
+    existing_meta: dict[str, Any] = {}
+    raw_meta = row["metadata_json"]
+    if isinstance(raw_meta, str) and raw_meta.strip():
+        try:
+            parsed = json.loads(raw_meta)
+        except json.JSONDecodeError:
+            parsed = {}
+        if isinstance(parsed, dict):
+            existing_meta = parsed
+    if isinstance(metadata_json, dict):
+        existing_meta.update(metadata_json)
+    conn.execute(
+        """
+        UPDATE mission_runs
+        SET status = ?, ts_ended = ?, metadata_json = ?
+        WHERE id = ?
+        """,
+        (
+            str(status).strip() if status is not None else str(row["status"]),
+            str(ts_ended).strip() if ts_ended is not None else row["ts_ended"],
+            json.dumps(existing_meta, sort_keys=True),
+            int(mission_run_id),
+        ),
+    )
+
+
+def insert_mission_step(
+    conn: sqlite3.Connection,
+    *,
+    mission_run_id: int,
+    ts: str,
+    step_id: str,
+    step_type: str,
+    status: str,
+    handoff_token: str | None,
+    detail_json: dict[str, Any] | None = None,
+) -> int:
+    """Insert one mission step row."""
+    cur = conn.execute(
+        """
+        INSERT INTO mission_steps(
+            mission_run_id, ts, step_id, step_type, status, handoff_token, detail_json
+        )
+        VALUES(?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            int(mission_run_id),
+            str(ts),
+            str(step_id).strip(),
+            str(step_type).strip(),
+            str(status).strip(),
+            str(handoff_token).strip() if handoff_token is not None else None,
+            json.dumps(detail_json or {}, sort_keys=True),
+        ),
+    )
+    if cur.lastrowid is None:
+        raise RuntimeError("Failed to insert mission step row")
+    return int(cur.lastrowid)
+
+
+def fetch_mission_run(conn: sqlite3.Connection, run_id: str) -> sqlite3.Row | None:
+    """Fetch one mission run row by external run id."""
+    return conn.execute(
+        """
+        SELECT id, run_id, ts_started, ts_ended, mode, status, graph_id, metadata_json
+        FROM mission_runs
+        WHERE run_id = ?
+        """,
+        (str(run_id).strip(),),
+    ).fetchone()
+
+
+def list_mission_steps(conn: sqlite3.Connection, mission_run_id: int) -> list[sqlite3.Row]:
+    """List ordered steps for one mission run."""
+    return conn.execute(
+        """
+        SELECT ts, step_id, step_type, status, handoff_token, detail_json
+        FROM mission_steps
+        WHERE mission_run_id = ?
+        ORDER BY id ASC
+        """,
+        (int(mission_run_id),),
+    ).fetchall()
+
+
+def insert_certification_run(
+    conn: sqlite3.Connection,
+    *,
+    ts: str,
+    cert_type: str,
+    profile: str,
+    passed: bool,
+    score: float,
+    detail_json: dict[str, Any] | None = None,
+) -> int:
+    """Insert one replay/chaos certification result row."""
+    cur = conn.execute(
+        """
+        INSERT INTO certification_runs(ts, cert_type, profile, pass, score, detail_json)
+        VALUES(?, ?, ?, ?, ?, ?)
+        """,
+        (
+            str(ts),
+            str(cert_type).strip(),
+            str(profile).strip(),
+            int(bool(passed)),
+            float(score),
+            json.dumps(detail_json or {}, sort_keys=True),
+        ),
+    )
+    if cur.lastrowid is None:
+        raise RuntimeError("Failed to insert certification run row")
+    return int(cur.lastrowid)
+
+
+def list_recent_certification_runs(
+    conn: sqlite3.Connection,
+    *,
+    cert_type: str | None = None,
+    profile: str | None = None,
+    limit: int = 50,
+) -> list[sqlite3.Row]:
+    """Return recent certification runs optionally filtered by type/profile."""
+    where: list[str] = []
+    args: list[object] = []
+    if cert_type is not None:
+        where.append("cert_type = ?")
+        args.append(str(cert_type).strip())
+    if profile is not None:
+        where.append("profile = ?")
+        args.append(str(profile).strip())
+    clause = f"WHERE {' AND '.join(where)}" if where else ""
+    return conn.execute(
+        f"""
+        SELECT ts, cert_type, profile, pass, score, detail_json
+        FROM certification_runs
+        {clause}
+        ORDER BY id DESC
+        LIMIT ?
+        """,
+        (*args, max(1, int(limit))),
+    ).fetchall()

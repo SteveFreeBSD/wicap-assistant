@@ -71,6 +71,27 @@ Canonical chain: `ASSISTANT_MISSION.md` -> `ASSISTANT_ROADMAP.md` -> this file
 - WS-13 Chaos + Replay Certification: replay/chaos harnesses remain active roadmap items for promotion certification.
 - WS-14 Governance + Docs Sync: implemented canonical docs updates for roadmap/workslice surfaces and command references.
 
+## 0.2 Parity+ Increment (WS-15 .. WS-32 Seed Pass)
+- Implemented cross-repo contract expansion seeds:
+  - WiCAP: `wicap.control.v2`, `wicap.anomaly.v3` contracts + fixtures + schema tests.
+  - Assistant: `wicap.telemetry.v2` contract + parity tests.
+- Implemented policy explain and control-plane hardening:
+  - assistant `agent sandbox-explain` with deterministic deny trace + budget state.
+  - actuator and control policy events now persist policy-trace/failure-class metadata.
+- Implemented failover persistence baseline:
+  - assistant DB tables `failover_events` and `auth_profile_state` + `agent failover-state` surface.
+  - WiCAP API adds `/api/system/failover-state`.
+- Implemented mission graph + certification scaffolding:
+  - assistant DB tables `mission_runs`, `mission_steps`, `certification_runs`.
+  - soak runs now persist mission graph snapshots.
+  - assistant CLI adds `agent mission-graph`, `agent replay-certify`, `agent chaos-certify`.
+- Implemented memory/backend expansion baseline:
+  - optional backend abstraction (`sqlite` default, `qdrant` fallback mode), retrieval citation traces.
+  - memory maintenance compaction reporting + persisted compaction rows.
+- Implemented anomaly-v3 signal bridge:
+  - WiCAP intel worker now emits `wicap_anomaly_events_v3.jsonl`.
+  - assistant ingest parses v3 fields (`fusion_score`, `predictive_horizon_sec`, `route_confidence`, `drift_guard`).
+
 ## 1. Program Goal
 Build a WiCAP-native autonomous control agent with durable memory, adaptive learning, network anomaly intelligence, and secure cloud telemetry without breaking deterministic safety guarantees.
 

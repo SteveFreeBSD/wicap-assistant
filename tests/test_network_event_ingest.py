@@ -105,6 +105,41 @@ def _write_anomaly_events_v2(path: Path) -> None:
     path.write_text("\n".join(json.dumps(payload) for payload in payloads) + "\n", encoding="utf-8")
 
 
+def _write_anomaly_events_v3(path: Path) -> None:
+    payloads = [
+        {
+            "anomaly_contract_version": "wicap.anomaly.v3",
+            "ts": "2026-02-11T09:00:02Z",
+            "category": "anomaly_stream",
+            "signature": "anomaly_stream|global|aa:bb:cc:dd:ee:ff",
+            "sensor_id": "sensor-1",
+            "scope": "global",
+            "primary_score": 90.2,
+            "fusion_score": 87.4,
+            "score": 90.2,
+            "confidence": 82,
+            "severity": 4,
+            "is_anomaly": True,
+            "baseline_ready": True,
+            "baseline_maturity": 0.97,
+            "baseline_sample_count": 340,
+            "drift_state": {"status": "drift", "delta": 11.1, "long_mean": 40.0, "short_mean": 51.1, "sample_count": 90},
+            "drift_guard": {"status": "guarded", "bounded_delta": 11.1, "rollback_ready": True},
+            "predictive_horizon_sec": 300,
+            "route_confidence": 0.84,
+            "score_components": {"z_rms": 2.7},
+            "shadow_scores": {"mad_robust": 76.0},
+            "model_votes": {"primary": True, "mad_robust": True},
+            "vote_agreement": 1.0,
+            "feature_window": {"window_start": 1, "window_end": 2, "event_count": 13},
+            "feature_vector": {"deauth_rate": 4.8},
+            "evidence_event_ids": ["event-9"],
+        }
+    ]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(json.dumps(payload) for payload in payloads) + "\n", encoding="utf-8")
+
+
 def _write_prediction_events(path: Path, *, risk_score: float = 72.4, horizon_sec: int = 300) -> None:
     payloads = [
         {
@@ -242,6 +277,34 @@ def test_ingest_network_events_reads_wicap_anomaly_v2_contract_stream(monkeypatc
         assert str(shadow_row["model_id"]) == "mad_robust"
         assert int(shadow_row["vote"]) == 1
         assert str(shadow_row["source"]).endswith("wicap_anomaly_events_v2.jsonl")
+    finally:
+        conn.close()
+
+
+def test_ingest_network_events_reads_wicap_anomaly_v3_contract_stream(monkeypatch, tmp_path: Path) -> None:
+    repo_root = tmp_path / "wicap"
+    stream = repo_root / "captures" / "wicap_anomaly_events_v3.jsonl"
+    _write_anomaly_events_v3(stream)
+    monkeypatch.setenv("WICAP_REPO_ROOT", str(repo_root))
+
+    conn = connect_db(tmp_path / "assistant.db")
+    try:
+        files_seen, events_added = ingest_network_events(conn)
+        conn.commit()
+        assert int(files_seen) == 1
+        assert int(events_added) == 1
+
+        row = conn.execute(
+            "SELECT category, extra_json FROM log_events ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        assert row is not None
+        assert str(row["category"]) == "network_anomaly"
+        extra = json.loads(str(row["extra_json"]))
+        assert str(extra["anomaly_contract_version"]) == "wicap.anomaly.v3"
+        assert float(extra["fusion_score"]) == 87.4
+        assert float(extra["route_confidence"]) == 0.84
+        assert int(extra["predictive_horizon_sec"]) == 300
+        assert str(extra["drift_guard"]["status"]) == "guarded"
     finally:
         conn.close()
 

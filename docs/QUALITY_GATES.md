@@ -12,6 +12,7 @@ Define the deterministic checks that must pass before release freezes or major c
 4. Ingest reruns on unchanged sources are idempotent.
 5. CLI surface and docs stay in sync.
 6. Mission/roadmap/alignment/handoff guardrails remain coherent.
+7. Replay and chaos certification harnesses remain deterministic and bounded.
 
 ## Enforced Test Mapping
 
@@ -49,6 +50,12 @@ Define the deterministic checks that must pass before release freezes or major c
   - Top-level and per-command help is runnable.
 - `tests/test_docs_contract.py`
   - Authority hierarchy and guardrail text are present and consistent.
+
+### Certification scaffolds
+- `tests/replay/test_replay_certification.py`
+  - Replay certification writes deterministic certification records.
+- `tests/chaos/test_chaos_certification.py`
+  - Chaos certification computes bounded degraded-cycle rates and persists results.
 
 ## Release Checklist
 1. `pytest -q`

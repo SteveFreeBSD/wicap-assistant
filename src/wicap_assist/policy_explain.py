@@ -9,6 +9,7 @@ import subprocess
 import sys
 from typing import Any, Callable
 
+from wicap_assist.control_planes import ControlPlanePolicy
 from wicap_assist.settings import wicap_repo_root
 from wicap_assist.util.time import utc_now_iso
 
@@ -142,6 +143,33 @@ def collect_policy_explain(
         }
 
     return fallback
+
+
+def collect_sandbox_explain(
+    *,
+    action: str,
+    mode: str,
+    plane_policy: ControlPlanePolicy | None = None,
+) -> dict[str, Any]:
+    """Evaluate one action against control planes and emit deterministic policy trace."""
+    raw_action = str(action or "").strip().lower()
+    normalized_action = raw_action.split(":", 1)[0].strip() if raw_action.startswith("restart_service:") else raw_action
+    normalized_mode = str(mode or "observe").strip().lower() or "observe"
+    policy = plane_policy or ControlPlanePolicy.from_env()
+    decision = policy.evaluate(
+        action_name=normalized_action,
+        mode=normalized_mode,
+        record_usage=False,
+    )
+    return {
+        "ts": utc_now_iso(),
+        "action": raw_action,
+        "mode": normalized_mode,
+        "allowed": bool(decision.allowed),
+        "denied_by": decision.denied_by,
+        "reason": decision.reason,
+        "policy_trace": dict(decision.policy_trace),
+    }
 
 
 def policy_explain_to_json(payload: dict[str, Any]) -> str:

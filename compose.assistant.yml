@@ -48,3 +48,44 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     stdin_open: true
     tty: true
+
+  wicap-assist-scheduler:
+    profiles: ["scheduler", "hybrid"]
+    build: .
+    network_mode: host
+    environment:
+      - WICAP_REPO_ROOT=/wicap
+      - WICAP_ASSIST_MEMORY_BACKEND=${WICAP_ASSIST_MEMORY_BACKEND:-sqlite}
+    volumes:
+      - ./data:/app/data
+      - ${WICAP_HOST_REPO_ROOT:-../wicap}:/wicap:ro
+    command:
+      [
+        "memory-maintenance",
+        "--lookback-days",
+        "14",
+        "--stale-days",
+        "7",
+        "--max-recent-transitions",
+        "24",
+        "--prune-stale",
+      ]
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    profiles: ["hybrid"]
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+
+  qdrant:
+    image: qdrant/qdrant:v1.11.1
+    profiles: ["hybrid"]
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - ./data/qdrant:/qdrant/storage
+    restart: unless-stopped

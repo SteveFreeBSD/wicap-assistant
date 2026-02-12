@@ -8,8 +8,10 @@ import sqlite3
 from typing import Any
 
 from wicap_assist.forecast import summarize_forecasts
+from wicap_assist.failover_profiles import failover_state_snapshot
 from wicap_assist.live import collect_live_cycle
 from wicap_assist.policy_explain import collect_policy_explain
+from wicap_assist.proactive_planner import plan_proactive_actions
 from wicap_assist.db import summarize_recent_drift
 from wicap_assist.util.time import utc_now_iso
 
@@ -25,13 +27,17 @@ def build_control_center_snapshot(
     observation = collect_live_cycle(conn)
     forecast = summarize_forecasts(conn, lookback_hours=max(1, int(forecast_lookback_hours)))
     drift = summarize_recent_drift(conn)
+    failover = failover_state_snapshot(conn)
+    proactive = plan_proactive_actions(conn)
     policy = collect_policy_explain(repo_root=repo_root)
     return {
         "generated_ts": utc_now_iso(),
         "mode": str(mode),
         "policy": policy,
+        "failover": failover,
         "forecast": forecast,
         "drift": drift,
+        "proactive": proactive,
         "observation": observation,
     }
 
@@ -44,6 +50,8 @@ def format_control_center_text(payload: dict[str, Any]) -> str:
     policy = payload.get("policy", {})
     forecast = payload.get("forecast", {})
     drift = payload.get("drift", {})
+    failover = payload.get("failover", {})
+    proactive = payload.get("proactive", {})
     observation = payload.get("observation", {})
     control_plane = policy.get("control_plane", {}) if isinstance(policy, dict) else {}
     intel = policy.get("intel_worker", {}) if isinstance(policy, dict) else {}
@@ -73,11 +81,24 @@ def format_control_center_text(payload: dict[str, Any]) -> str:
             f"max_risk={forecast.get('max_risk_score')}"
         ),
         (
+            "failover: "
+            f"profile={failover.get('auth_profile')} "
+            f"attempt={failover.get('attempt')} "
+            f"class={failover.get('failure_class')} "
+            f"cooldown_until={failover.get('cooldown_until')}"
+        ),
+        (
             "drift: "
             f"count={drift.get('count')} "
             f"drift_count={drift.get('drift_count')} "
             f"drift_rate={drift.get('drift_rate')} "
             f"max_abs_delta={drift.get('max_abs_delta')}"
+        ),
+        (
+            "proactive: "
+            f"planned_count={proactive.get('planned_count')} "
+            f"risk_threshold={proactive.get('risk_threshold')} "
+            f"min_route_confidence={proactive.get('min_route_confidence')}"
         ),
     ]
 

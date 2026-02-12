@@ -9,7 +9,9 @@ import subprocess
 from typing import Any, Callable
 
 from wicap_assist.actuators import run_allowlisted_action
+from wicap_assist.agent_runtime import orchestrate_role_handoff
 from wicap_assist.anomaly_routing import route_for_anomaly
+from wicap_assist.failover_profiles import classify_failover_failure
 from wicap_assist.util.time import utc_now_iso
 
 ControlRunner = Callable[..., subprocess.CompletedProcess[str]]
@@ -234,7 +236,7 @@ class ControlPolicy:
             },
         )
 
-    def _run_allowlisted(self, action: str) -> tuple[str, list[str], str]:
+    def _run_allowlisted(self, action: str) -> tuple[str, list[str], str, dict[str, Any], str]:
         result = run_allowlisted_action(
             action=str(action),
             mode=self.mode,
@@ -243,7 +245,13 @@ class ControlPolicy:
             timeout_seconds=max(1, int(self.timeout_seconds)),
         )
         flat_command = result.commands[0] if result.commands else []
-        return result.status, flat_command, result.detail
+        trace = result.policy_trace if isinstance(result.policy_trace, dict) else {}
+        failure_class = (
+            classify_failover_failure(status=result.status, detail=result.detail)
+            if str(result.status) not in {"executed_ok", "stable", "skipped_observe_mode"}
+            else "none"
+        )
+        return result.status, flat_command, result.detail, trace, failure_class
 
     def _ladder_for(self, service: str) -> dict[str, int]:
         ladder = (self.service_ladders or {}).get(service)
@@ -319,13 +327,15 @@ class ControlPolicy:
         action_results: list[dict[str, object]] = []
         failed = False
         for action in sequence:
-            status, command, detail = self._run_allowlisted(action)
+            status, command, detail, policy_trace, failure_class = self._run_allowlisted(action)
             action_results.append(
                 {
                     "action": action,
                     "status": status,
                     "command": command,
                     "detail": detail,
+                    "policy_trace": policy_trace,
+                    "failure_class": failure_class,
                 }
             )
             if status == "executed_ok":
@@ -492,7 +502,7 @@ class ControlPolicy:
             cooldown_until = int(self._anomaly_state.get(route_key, 0))
             if int(self._cycle) < cooldown_until:
                 continue
-            status, command, detail = self._run_allowlisted("status_check")
+            status, command, detail, policy_trace, failure_class = self._run_allowlisted("status_check")
             self._anomaly_state[route_key] = int(self._cycle + max(1, self.action_cooldown_cycles))
             events.append(
                 {
@@ -507,6 +517,14 @@ class ControlPolicy:
                         "anomaly_class": class_id,
                         "command": command,
                         "detail": detail,
+                        "policy_trace": policy_trace,
+                        "failure_class": failure_class,
+                        "handoff": orchestrate_role_handoff(
+                            planner_intent=f"anomaly_route:{class_id}",
+                            action="status_check",
+                            verifier_step="status_check",
+                            ts=ts,
+                        ),
                     },
                 }
             )
@@ -574,7 +592,7 @@ class ControlPolicy:
                 continue
 
             if down_streak >= check_threshold and check_attempts == 0:
-                status, command, detail = self._run_allowlisted("status_check")
+                status, command, detail, policy_trace, failure_class = self._run_allowlisted("status_check")
                 state["check_attempts"] = check_attempts + 1
                 if status.startswith("executed_"):
                     state["cooldown_until"] = int(self._cycle + self.action_cooldown_cycles)
@@ -596,6 +614,14 @@ class ControlPolicy:
                             "rollback_max_attempts": max_rollbacks,
                             "command": command,
                             "detail": detail,
+                            "policy_trace": policy_trace,
+                            "failure_class": failure_class,
+                            "handoff": orchestrate_role_handoff(
+                                planner_intent="threshold_check",
+                                action="status_check",
+                                verifier_step="status_check",
+                                ts=ts,
+                            ),
                         },
                     }
                 )
@@ -607,7 +633,7 @@ class ControlPolicy:
                     if recover_attempts == 0
                     else "compose_up"
                 )
-                status, command, detail = self._run_allowlisted(recover_action)
+                status, command, detail, policy_trace, failure_class = self._run_allowlisted(recover_action)
                 state["recover_attempts"] = recover_attempts + 1
                 if status.startswith("executed_"):
                     state["cooldown_until"] = int(self._cycle + self.action_cooldown_cycles)
@@ -629,6 +655,14 @@ class ControlPolicy:
                             "rollback_max_attempts": max_rollbacks,
                             "command": command,
                             "detail": detail,
+                            "policy_trace": policy_trace,
+                            "failure_class": failure_class,
+                            "handoff": orchestrate_role_handoff(
+                                planner_intent="threshold_recover",
+                                action=recover_action,
+                                verifier_step="status_check",
+                                ts=ts,
+                            ),
                         },
                     }
                 )

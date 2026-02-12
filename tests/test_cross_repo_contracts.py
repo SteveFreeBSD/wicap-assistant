@@ -13,8 +13,10 @@ _ASSISTANT_FIXTURE_DIR = _ASSISTANT_ROOT / "tests" / "fixtures" / "wicap_contrac
 _WICAP_CONTRACT_NAMES = (
     "wicap.event.v1.json",
     "wicap.control.v1.json",
+    "wicap.control.v2.json",
     "wicap.anomaly.v1.json",
     "wicap.anomaly.v2.json",
+    "wicap.anomaly.v3.json",
     "wicap.feedback.v1.json",
     "wicap.prediction.v1.json",
 )
@@ -56,11 +58,28 @@ def test_telemetry_contract_shape_is_provider_neutral_otlp() -> None:
     assert bool(contract.get("redaction_required")) is True
 
 
+def test_telemetry_v2_contract_declares_new_event_families() -> None:
+    contract = _read_json(_ASSISTANT_CONTRACT_DIR / "wicap.telemetry.v2.json")
+    assert contract.get("schema") == "wicap.telemetry.v2"
+    assert contract.get("telemetry_event_version") == "wicap.telemetry.v2"
+    event_families = contract.get("event_families")
+    assert isinstance(event_families, list)
+    assert {str(item) for item in event_families} >= {
+        "policy.decision",
+        "failover.transition",
+        "memory.compaction",
+        "mission.step",
+        "certification.result",
+    }
+
+
 def test_assistant_wicap_contract_fixtures_are_present_and_versioned() -> None:
     event_contract = _read_json(_ASSISTANT_FIXTURE_DIR / "wicap.event.v1.json")
     control_contract = _read_json(_ASSISTANT_FIXTURE_DIR / "wicap.control.v1.json")
+    control_v2_contract = _read_json(_ASSISTANT_FIXTURE_DIR / "wicap.control.v2.json")
     anomaly_contract = _read_json(_ASSISTANT_FIXTURE_DIR / "wicap.anomaly.v1.json")
     anomaly_v2_contract = _read_json(_ASSISTANT_FIXTURE_DIR / "wicap.anomaly.v2.json")
+    anomaly_v3_contract = _read_json(_ASSISTANT_FIXTURE_DIR / "wicap.anomaly.v3.json")
     feedback_contract = _read_json(_ASSISTANT_FIXTURE_DIR / "wicap.feedback.v1.json")
     prediction_contract = _read_json(_ASSISTANT_FIXTURE_DIR / "wicap.prediction.v1.json")
 
@@ -69,12 +88,16 @@ def test_assistant_wicap_contract_fixtures_are_present_and_versioned() -> None:
 
     assert control_contract.get("schema") == "wicap.control.v1"
     assert control_contract.get("control_intent_version") == "wicap.control.v1"
+    assert control_v2_contract.get("schema") == "wicap.control.v2"
+    assert control_v2_contract.get("control_intent_version") == "wicap.control.v2"
 
     assert anomaly_contract.get("schema") == "wicap.anomaly.v1"
     assert anomaly_contract.get("anomaly_contract_version") == "wicap.anomaly.v1"
 
     assert anomaly_v2_contract.get("schema") == "wicap.anomaly.v2"
     assert anomaly_v2_contract.get("anomaly_contract_version") == "wicap.anomaly.v2"
+    assert anomaly_v3_contract.get("schema") == "wicap.anomaly.v3"
+    assert anomaly_v3_contract.get("anomaly_contract_version") == "wicap.anomaly.v3"
 
     assert feedback_contract.get("schema") == "wicap.feedback.v1"
     assert feedback_contract.get("feedback_contract_version") == "wicap.feedback.v1"

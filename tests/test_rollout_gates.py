@@ -14,13 +14,15 @@ from wicap_assist.rollout_gates import evaluate_promotion_readiness
 def test_evaluate_rollout_gates_passes_with_healthy_metrics(tmp_path) -> None:
     conn = connect_db(tmp_path / "assistant.db")
     try:
-        for idx in range(25):
+        for idx in range(220):
+            minute = idx // 60
+            second = idx % 60
             insert_decision_feature(
                 conn,
                 control_session_id=None,
                 soak_run_id=None,
                 episode_id=None,
-                ts=f"2026-02-11T00:00:{idx:02d}+00:00",
+                ts=f"2026-02-11T00:{minute:02d}:{second:02d}+00:00",
                 mode="autonomous",
                 policy_profile="autonomous-v1",
                 decision="threshold_recover",
@@ -28,18 +30,18 @@ def test_evaluate_rollout_gates_passes_with_healthy_metrics(tmp_path) -> None:
                 status="executed_ok",
                 feature_json={
                     "reward_value": 0.2,
-                    "shadow_gate_samples": 25,
+                    "shadow_gate_samples": 220,
                     "shadow_gate_agreement_rate": 0.82,
                     "shadow_gate_success_rate": 0.74,
                     "shadow_gate_passes": True,
                 },
             )
 
-        for idx in range(6):
+        for idx in range(13):
             session_id = insert_control_session(
                 conn,
                 soak_run_id=None,
-                started_ts=f"2026-02-11T01:00:0{idx}+00:00",
+                started_ts=f"2026-02-11T01:00:{idx:02d}+00:00",
                 mode="autonomous",
                 status="running",
                 current_phase="finalize",
@@ -48,7 +50,7 @@ def test_evaluate_rollout_gates_passes_with_healthy_metrics(tmp_path) -> None:
             update_control_session(
                 conn,
                 control_session_id=session_id,
-                ended_ts=f"2026-02-11T01:10:0{idx}+00:00",
+                ended_ts=f"2026-02-11T01:10:{idx:02d}+00:00",
                 status="escalated" if idx == 0 else "completed",
             )
 

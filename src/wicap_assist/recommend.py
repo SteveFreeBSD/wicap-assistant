@@ -309,6 +309,7 @@ def _empty_recommendation_payload(target: str, *, git_context: dict[str, Any] | 
         "verification_steps": [],
         "memory_episodes": [],
         "memory_episode_count": 0,
+        "memory_citation_trace": [],
     }
 
 
@@ -325,10 +326,27 @@ def _memory_confidence(memory_episodes: list[dict[str, Any]]) -> float:
     if not memory_episodes:
         return 0.0
     best = memory_episodes[0]
-    score = int(best.get("match_score", 0) or 0)
+    score = float(best.get("match_score", 0) or 0.0)
     base = 0.2
     bonus = min(0.25, float(score) / 200.0)
     return round(min(0.45, base + bonus), 3)
+
+
+def _memory_citation_trace(memory_episodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for item in memory_episodes:
+        if not isinstance(item, dict):
+            continue
+        out.append(
+            {
+                "episode_id": item.get("episode_id"),
+                "match_score": item.get("match_score"),
+                "matched_tokens": item.get("matched_tokens"),
+                "backend": item.get("retrieval_backend"),
+                "rank_components": item.get("rank_components"),
+            }
+        )
+    return out[:3]
 
 
 def _apply_known_issue_hint(
@@ -388,6 +406,7 @@ def build_recommendation(conn: sqlite3.Connection, target: str) -> dict[str, Any
             payload["risk_notes"] = "memory-based recovery suggestion; verify runtime state before execution"
         payload["memory_episodes"] = memory_episodes
         payload["memory_episode_count"] = int(len(memory_episodes))
+        payload["memory_citation_trace"] = _memory_citation_trace(memory_episodes)
         return payload
 
     context_memory_episodes = retrieve_episode_memories(conn, context.signature, limit=3)
@@ -481,6 +500,7 @@ def build_recommendation(conn: sqlite3.Connection, target: str) -> dict[str, Any
         )
         payload["memory_episodes"] = memory_episodes
         payload["memory_episode_count"] = int(len(memory_episodes))
+        payload["memory_citation_trace"] = _memory_citation_trace(memory_episodes)
         if memory_action:
             payload["recommended_action"] = memory_action
             payload["confidence"] = _memory_confidence(memory_episodes)
@@ -607,6 +627,7 @@ def build_recommendation(conn: sqlite3.Connection, target: str) -> dict[str, Any
         "verification_steps": verification_steps,
         "memory_episodes": memory_episodes,
         "memory_episode_count": int(len(memory_episodes)),
+        "memory_citation_trace": _memory_citation_trace(memory_episodes),
     }
 
 

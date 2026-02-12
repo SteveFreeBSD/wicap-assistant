@@ -7,7 +7,7 @@ import json
 import sqlite3
 from typing import Any
 
-from wicap_assist.evidence_query import signature_tokens, where_like
+from wicap_assist.memory_backend import query_memory_candidates
 from wicap_assist.util.evidence import normalize_signature, parse_utc_datetime
 
 
@@ -96,6 +96,30 @@ def _score_memory_candidate(
     return int(score), matched_tokens
 
 
+def _recency_bonus(ts_started: str) -> float:
+    ts = parse_utc_datetime(ts_started)
+    if ts is None:
+        return 0.0
+    age_days = max(0.0, (datetime.now(timezone.utc) - ts).total_seconds() / 86400.0)
+    if age_days <= 1.0:
+        return 6.0
+    if age_days <= 7.0:
+        return 4.0
+    if age_days <= 30.0:
+        return 2.0
+    return 0.0
+
+
+def _outcome_bonus(outcome: str, status: str) -> float:
+    normalized_outcome = str(outcome).strip().lower()
+    normalized_status = str(status).strip().lower()
+    if normalized_status == "executed_ok" or normalized_outcome in {"executed_ok", "pass", "stable"}:
+        return 4.0
+    if normalized_status in {"executed_fail", "escalated"} or normalized_outcome in {"executed_fail", "fail"}:
+        return -3.0
+    return 0.0
+
+
 def retrieve_episode_memories(
     conn: sqlite3.Connection,
     signature: str,
@@ -108,42 +132,17 @@ def retrieve_episode_memories(
     if not target:
         return []
 
+    from wicap_assist.evidence_query import signature_tokens
+
     tokens = signature_tokens(target, limit=8)
     if not tokens:
         return []
 
-    where, args = where_like(
-        "ep.pre_state_json || ' ' || ep.post_state_json || ' ' || ep.metadata_json || ' ' || "
-        "coalesce(ev.payload_json, '') || ' ' || coalesce(eo.detail_json, '') || ' ' || "
-        "ep.decision || ' ' || coalesce(ep.action, '') || ' ' || ep.status",
-        tokens,
+    backend_name, rows, backend_meta = query_memory_candidates(
+        conn,
+        signature=target,
+        candidate_limit=max(1, int(candidate_limit)),
     )
-    if not where:
-        return []
-
-    rows = conn.execute(
-        f"""
-        SELECT
-            ep.id,
-            ep.ts_started,
-            ep.decision,
-            ep.action,
-            ep.status,
-            ep.pre_state_json,
-            ep.post_state_json,
-            ep.metadata_json,
-            ev.payload_json,
-            eo.outcome,
-            eo.detail_json AS outcome_detail_json
-        FROM episodes AS ep
-        LEFT JOIN episode_events AS ev ON ev.episode_id = ep.id
-        LEFT JOIN episode_outcomes AS eo ON eo.episode_id = ep.id
-        WHERE ({where})
-        ORDER BY coalesce(ep.ts_started, '') DESC, ep.id DESC
-        LIMIT ?
-        """,
-        [*args, max(1, int(candidate_limit))],
-    ).fetchall()
     if not rows:
         return []
 
@@ -159,11 +158,14 @@ def retrieve_episode_memories(
             status=str(row["status"] or ""),
             outcome=str(row["outcome"] or ""),
         )
-        if match_score <= 0 or not matched_tokens:
+        recency = _recency_bonus(str(row["ts_started"] or ""))
+        outcome_score = _outcome_bonus(str(row["outcome"] or ""), str(row["status"] or ""))
+        composite = float(match_score) + float(recency) + float(outcome_score)
+        if composite <= 0 or not matched_tokens:
             continue
 
         existing = out.get(episode_id)
-        if existing is not None and int(existing["match_score"]) >= int(match_score):
+        if existing is not None and float(existing["match_score"]) >= float(composite):
             continue
 
         payload = _json_load_dict(row["payload_json"])
@@ -180,8 +182,15 @@ def retrieve_episode_memories(
             "outcome": str(row["outcome"] or ""),
             "service": service,
             "signature": primary_signature,
-            "match_score": int(match_score),
+            "match_score": round(float(composite), 4),
             "matched_tokens": matched_tokens,
+            "rank_components": {
+                "token_match": int(match_score),
+                "recency_bonus": round(float(recency), 4),
+                "outcome_bonus": round(float(outcome_score), 4),
+            },
+            "retrieval_backend": backend_name,
+            "retrieval_backend_meta": backend_meta,
         }
 
     ranked = sorted(

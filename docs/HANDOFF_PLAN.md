@@ -3,6 +3,7 @@
 ## Execution Status
 - Milestones 1 through 4 are implemented and covered by the default test suite.
 - Remaining work is roadmap-driven and includes approved cross-repo expansion for memory, adaptive control, network intelligence, and OTLP telemetry.
+- Parity+ seed pass implemented: control/anomaly/telemetry v2+ contracts, sandbox policy trace, failover persistence, mission graph, and replay/chaos certification scaffolds.
 
 ## Canonical Operator Workflow
 Program contract reference: `docs/CROSS_REPO_INTELLIGENCE_WORKSLICES.md` (cross-repo execution contract).

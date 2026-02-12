@@ -9,7 +9,7 @@ from pathlib import Path
 import sqlite3
 from typing import Any
 
-from wicap_assist.db import update_control_session
+from wicap_assist.db import insert_memory_compaction, update_control_session
 from wicap_assist.util.evidence import parse_utc_datetime
 from wicap_assist.util.time import utc_now_iso
 
@@ -59,6 +59,7 @@ def run_memory_maintenance(
     stale_days: int = 7,
     max_decision_rows: int = 5000,
     max_session_rows: int = 500,
+    max_recent_transitions: int = 24,
     prune_stale: bool = False,
     now_ts: str | None = None,
 ) -> dict[str, Any]:
@@ -137,6 +138,8 @@ def run_memory_maintenance(
 
     stale_sessions: list[dict[str, Any]] = []
     pruned_ids: list[int] = []
+    compacted_session_ids: list[int] = []
+    compacted_rows = 0
     for row in session_rows:
         ended_dt = parse_utc_datetime(row["ended_ts"])
         if ended_dt is None or ended_dt >= stale_cutoff:
@@ -148,6 +151,24 @@ def run_memory_maintenance(
         unresolved_count = len(unresolved) if isinstance(unresolved, list) else 0
         pending_count = len(pending) if isinstance(pending, list) else 0
         if unresolved_count <= 0 and pending_count <= 0:
+            recent = working_memory.get("recent_transitions")
+            if isinstance(recent, list) and len(recent) > int(max_recent_transitions):
+                overflow = len(recent) - int(max_recent_transitions)
+                compacted_rows += int(max(0, overflow))
+                working_memory["recent_transitions"] = recent[-int(max_recent_transitions) :]
+                update_control_session(
+                    conn,
+                    control_session_id=int(row["id"]),
+                    metadata_json={
+                        "working_memory": working_memory,
+                        "memory_compaction": {
+                            "last_compacted_ts": now_text,
+                            "compacted_rows": int(max(0, overflow)),
+                            "policy": "tail_keep",
+                        },
+                    },
+                )
+                compacted_session_ids.append(int(row["id"]))
             continue
 
         session_id = int(row["id"])
@@ -176,7 +197,19 @@ def run_memory_maintenance(
             )
             pruned_ids.append(session_id)
 
-    if prune_stale:
+    if compacted_rows > 0:
+        insert_memory_compaction(
+            conn,
+            ts=now_text,
+            control_session_id=None,
+            compacted_rows=int(compacted_rows),
+            summary_json={
+                "session_ids": compacted_session_ids[:100],
+                "max_recent_transitions": int(max_recent_transitions),
+            },
+        )
+
+    if prune_stale or compacted_rows > 0:
         conn.commit()
 
     avg_reward = 0.0 if not rewards else (sum(rewards) / float(len(rewards)))
@@ -192,6 +225,9 @@ def run_memory_maintenance(
         "stale_session_count": int(len(stale_sessions)),
         "pruned_session_ids": pruned_ids,
         "pruned_session_count": int(len(pruned_ids)),
+        "compacted_session_ids": compacted_session_ids,
+        "compacted_rows": int(compacted_rows),
+        "max_recent_transitions": int(max_recent_transitions),
     }
 
 

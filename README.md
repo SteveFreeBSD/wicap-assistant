@@ -91,6 +91,18 @@ docker compose ps
 curl -fsS http://127.0.0.1:8080/health || true
 docker compose up -d scout
 ```
+If the server is accessed over Wi-Fi SSH, keep `scout` as a separate explicit step (or run from `tmux`) because capture startup can disrupt a single management NIC.
+
+SSH-safe rollout smoke (no `jq`, waits for health, `scout` is opt-in):
+```bash
+cd /opt/wicap-assistant
+./scripts/server_rollout_smoke.sh
+```
+Optional strict mode with capture + enforced gates:
+```bash
+cd /opt/wicap-assistant
+./scripts/server_rollout_smoke.sh --with-scout --require-shadow-data --require-assistant --enforce-gate --enforce-contract
+```
 
 ## Live Control Quickstart
 Preflight runtime contract:
@@ -238,11 +250,11 @@ Data is stored in `./data/assistant.db`.
 - `wicap-assist backfill-report [--json]`
 - `wicap-assist fix-lineage "<signature>" [--json]`
 - `wicap-assist confidence-audit [--limit N] [--json]`
-- `wicap-assist memory-maintenance [--lookback-days N] [--stale-days N] [--max-decision-rows N] [--max-session-rows N] [--prune-stale] [--output <file>] [--json]`
+- `wicap-assist memory-maintenance [--lookback-days N] [--stale-days N] [--max-decision-rows N] [--max-session-rows N] [--max-recent-transitions N] [--prune-stale] [--output <file>] [--json]`
 - `wicap-assist rollout-gates [--lookback-days N] [--min-shadow-samples N] [--min-shadow-agreement-rate F] [--min-shadow-success-rate F] [--min-reward-avg F] [--max-autonomous-escalation-rate F] [--min-autonomous-runs N] [--max-rollback-failures N] [--min-proactive-samples N] [--min-proactive-success-rate F] [--max-proactive-relapse-rate F] [--history-file <file>] [--required-consecutive-passes N] [--enforce] [--json]`
 - `wicap-assist soak-run [--duration-minutes N] [--playwright-interval-minutes N] [--baseline-path <file>] [--baseline-update|--no-baseline-update] [--observe-interval-seconds N] [--control-mode monitor|observe|assist|autonomous] [--control-check-threshold N] [--control-recover-threshold N] [--control-max-recover-attempts N] [--control-action-cooldown-cycles N] [--require-runtime-contract|--no-require-runtime-contract] [--runtime-contract-path <file>] [--stop-on-escalation|--no-stop-on-escalation] [--dry-run]`
 - `wicap-assist live [--interval N] [--once] [--control-mode monitor|observe|assist|autonomous] [--control-check-threshold N] [--control-recover-threshold N] [--control-max-recover-attempts N] [--control-action-cooldown-cycles N] [--stop-on-escalation]`
-- `wicap-assist agent [console|explain-policy|forecast|control-center] [--control-mode monitor|observe|assist|autonomous] [--observe-interval-seconds N] [--lookback-hours N] [--json]`
+- `wicap-assist agent [console|explain-policy|sandbox-explain|forecast|control-center|failover-state|mission-graph|replay-certify|chaos-certify] [--control-mode monitor|observe|assist|autonomous] [--observe-interval-seconds N] [--lookback-hours N] [--action <action-id>] [--mode monitor|observe|assist|autonomous] [--profile <name>] [--run-id N] [--json]`
 
 ## Calibration Rules
 - Confidence is hard-capped below `0.95` unless strict criteria are met.

@@ -17,6 +17,7 @@ from wicap_assist.db import (
     close_running_control_sessions,
     insert_control_episode,
     insert_control_event,
+    insert_policy_decision,
     insert_control_session,
     insert_control_session_event,
     insert_decision_feature,
@@ -27,6 +28,11 @@ from wicap_assist.db import (
 )
 from wicap_assist.action_ranker import rank_allowlisted_actions
 from wicap_assist.decision_features import build_decision_feature_vector, query_prior_action_stats
+from wicap_assist.failover_profiles import (
+    apply_failover_transition,
+    load_failover_state,
+    persist_failover_state,
+)
 from wicap_assist.guardian import (
     GuardianState,
     PlaybookEntry,
@@ -751,6 +757,7 @@ def run_live_monitor(
     total_observations = 0
     total_control_events = 0
     escalated = False
+    failover_state = load_failover_state(conn)
 
     try:
         while True:
@@ -847,6 +854,58 @@ def run_live_monitor(
                     episode_id=episode_id,
                     detail_json=detail_payload,
                 )
+                policy_trace = detail_payload.get("policy_trace")
+                if action and isinstance(policy_trace, dict):
+                    denied_by = policy_trace.get("denied_by")
+                    reason = str(detail_payload.get("detail", "")).strip() or None
+                    insert_policy_decision(
+                        conn,
+                        ts=ts,
+                        control_session_id=int(control_session_id),
+                        soak_run_id=None,
+                        action=action,
+                        mode=str(control_mode),
+                        allowed=(str(status).strip().lower() not in {"rejected"}),
+                        denied_by=(str(denied_by).strip() if denied_by is not None else None),
+                        reason=reason,
+                        trace_id=str(policy_trace.get("trace_id", "")).strip() or None,
+                        policy_trace_json=policy_trace,
+                    )
+
+                failure_class = str(detail_payload.get("failure_class", "none")).strip().lower()
+                if action and failure_class not in {"", "none"}:
+                    failover_state = apply_failover_transition(
+                        failover_state,
+                        failure_class=failure_class,
+                        now_ts=ts,
+                    )
+                    persist_failover_state(
+                        conn,
+                        state=failover_state,
+                        control_session_id=int(control_session_id),
+                        detail={
+                            "decision": decision,
+                            "action": action,
+                            "status": status,
+                        },
+                    )
+                elif action and failure_class in {"", "none"} and str(status).strip().lower() == "executed_ok":
+                    if str(failover_state.failure_class).strip().lower() not in {"", "none"}:
+                        failover_state = apply_failover_transition(
+                            failover_state,
+                            failure_class="success",
+                            now_ts=ts,
+                        )
+                        persist_failover_state(
+                            conn,
+                            state=failover_state,
+                            control_session_id=int(control_session_id),
+                            detail={
+                                "decision": decision,
+                                "action": action,
+                                "status": status,
+                            },
+                        )
                 prior_stats = query_prior_action_stats(conn, action)
                 feature_vector = build_decision_feature_vector(
                     event=event,

@@ -46,6 +46,7 @@ from wicap_assist.fix_lineage import (
     format_fix_lineage_text,
     resolve_fix_lineage,
 )
+from wicap_assist.failover_profiles import failover_state_snapshot
 from wicap_assist.forecast import (
     forecast_to_json,
     format_forecast_text,
@@ -65,14 +66,17 @@ from wicap_assist.cross_pattern import (
 from wicap_assist.incident import load_bundle_json, write_incident_report
 from wicap_assist.live import run_live_monitor
 from wicap_assist.memory_maintenance import run_memory_maintenance, write_memory_maintenance_report
+from wicap_assist.mission_graph import mission_graph_snapshot
 from wicap_assist.guardian import run_guardian
 from wicap_assist.playbooks import generate_playbooks
 from wicap_assist.policy_explain import (
     collect_policy_explain,
+    collect_sandbox_explain,
     format_policy_explain_text,
     policy_explain_to_json,
 )
 from wicap_assist.recommend import build_recommendation, recommendation_to_json
+from wicap_assist.certification import certification_history, run_chaos_certification, run_replay_certification
 from wicap_assist.rollout_gates import evaluate_rollout_gates
 from wicap_assist.rollout_gates import (
     append_rollout_gate_history,
@@ -655,6 +659,42 @@ def _run_agent_explain_policy(*, as_json: bool) -> int:
     return 0
 
 
+def _run_agent_sandbox_explain(
+    *,
+    action: str,
+    mode: str,
+    as_json: bool,
+) -> int:
+    payload = collect_sandbox_explain(
+        action=str(action).strip(),
+        mode=_normalize_control_mode(str(mode)),
+    )
+    if as_json:
+        print(json.dumps(payload, sort_keys=True))
+    else:
+        trace = payload.get("policy_trace", {})
+        if not isinstance(trace, dict):
+            trace = {}
+        print(
+            "sandbox_explain: "
+            f"action={payload.get('action')} mode={payload.get('mode')} "
+            f"allowed={payload.get('allowed')} denied_by={payload.get('denied_by')}"
+        )
+        print(f"reason: {payload.get('reason') or '(none)'}")
+        print(
+            "budget: "
+            f"actions={trace.get('budget_state', {}).get('action_budget_used')}/"
+            f"{trace.get('budget_state', {}).get('action_budget_max')} "
+            f"elevated={trace.get('budget_state', {}).get('elevated_action_budget_used')}/"
+            f"{trace.get('budget_state', {}).get('elevated_action_budget_max')}"
+        )
+        deny_reasons = trace.get("deny_reasons", [])
+        if isinstance(deny_reasons, list):
+            for reason in deny_reasons:
+                print(f"- deny: {reason}")
+    return 0
+
+
 def _run_agent_forecast(
     db_path: Path,
     *,
@@ -698,6 +738,96 @@ def _run_agent_control_center(
     else:
         print(format_control_center_text(payload))
     return 0
+
+
+def _run_agent_failover_state(
+    db_path: Path,
+    *,
+    as_json: bool,
+) -> int:
+    conn = connect_db(db_path)
+    try:
+        payload = failover_state_snapshot(conn)
+        payload["history"] = certification_history(conn, cert_type=None).get("rows", [])[:5]
+    finally:
+        conn.close()
+    if as_json:
+        print(json.dumps(payload, sort_keys=True))
+    else:
+        print(
+            "failover_state: "
+            f"profile={payload.get('auth_profile')} attempt={payload.get('attempt')} "
+            f"class={payload.get('failure_class')} cooldown_until={payload.get('cooldown_until')}"
+        )
+    return 0
+
+
+def _run_agent_mission_graph(
+    db_path: Path,
+    *,
+    run_id: int,
+    as_json: bool,
+) -> int:
+    conn = connect_db(db_path)
+    try:
+        payload = mission_graph_snapshot(conn, run_id=f"soak-{int(run_id)}")
+    finally:
+        conn.close()
+    if as_json:
+        print(json.dumps(payload, sort_keys=True))
+    else:
+        print(
+            "mission_graph: "
+            f"run_id={payload.get('run_id')} found={payload.get('found')} "
+            f"steps={len(payload.get('steps', [])) if isinstance(payload.get('steps'), list) else 0}"
+        )
+    return 0
+
+
+def _run_agent_replay_certify(
+    db_path: Path,
+    *,
+    profile: str,
+    as_json: bool,
+) -> int:
+    conn = connect_db(db_path)
+    try:
+        payload = run_replay_certification(conn, profile=str(profile))
+        conn.commit()
+    finally:
+        conn.close()
+    if as_json:
+        print(json.dumps(payload, sort_keys=True))
+    else:
+        print(
+            "replay_certify: "
+            f"profile={payload.get('profile')} pass={payload.get('pass')} "
+            f"score={payload.get('score')} samples={payload.get('sample_count')}"
+        )
+    return 0 if bool(payload.get("pass")) else 2
+
+
+def _run_agent_chaos_certify(
+    db_path: Path,
+    *,
+    profile: str,
+    as_json: bool,
+) -> int:
+    conn = connect_db(db_path)
+    try:
+        payload = run_chaos_certification(conn, profile=str(profile))
+        conn.commit()
+    finally:
+        conn.close()
+    if as_json:
+        print(json.dumps(payload, sort_keys=True))
+    else:
+        print(
+            "chaos_certify: "
+            f"profile={payload.get('profile')} pass={payload.get('pass')} "
+            f"score={payload.get('score')} degraded_rate={payload.get('degraded_rate')}"
+        )
+    return 0 if bool(payload.get("pass")) else 2
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -882,6 +1012,12 @@ def build_parser() -> argparse.ArgumentParser:
     maintenance_parser.add_argument("--max-decision-rows", type=int, default=5000, help="Decision rows scan cap")
     maintenance_parser.add_argument("--max-session-rows", type=int, default=500, help="Control session scan cap")
     maintenance_parser.add_argument(
+        "--max-recent-transitions",
+        type=int,
+        default=24,
+        help="Compaction target for per-session working-memory transition history",
+    )
+    maintenance_parser.add_argument(
         "--prune-stale",
         action="store_true",
         help="Clear unresolved/pending working-memory state for stale ended sessions",
@@ -899,13 +1035,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Evaluate deterministic autonomous rollout/canary promotion gates",
     )
     rollout_parser.add_argument("--lookback-days", type=int, default=14, help="Lookback window in days")
-    rollout_parser.add_argument("--min-shadow-samples", type=int, default=20)
-    rollout_parser.add_argument("--min-shadow-agreement-rate", type=float, default=0.70)
-    rollout_parser.add_argument("--min-shadow-success-rate", type=float, default=0.60)
-    rollout_parser.add_argument("--min-reward-avg", type=float, default=0.00)
-    rollout_parser.add_argument("--max-autonomous-escalation-rate", type=float, default=0.20)
+    rollout_parser.add_argument("--min-shadow-samples", type=int, default=200)
+    rollout_parser.add_argument("--min-shadow-agreement-rate", type=float, default=0.82)
+    rollout_parser.add_argument("--min-shadow-success-rate", type=float, default=0.72)
+    rollout_parser.add_argument("--min-reward-avg", type=float, default=0.05)
+    rollout_parser.add_argument("--max-autonomous-escalation-rate", type=float, default=0.08)
     rollout_parser.add_argument("--min-autonomous-runs", type=int, default=5)
-    rollout_parser.add_argument("--max-rollback-failures", type=int, default=3)
+    rollout_parser.add_argument("--max-rollback-failures", type=int, default=1)
     rollout_parser.add_argument("--min-proactive-samples", type=int, default=0)
     rollout_parser.add_argument("--min-proactive-success-rate", type=float, default=0.0)
     rollout_parser.add_argument("--max-proactive-relapse-rate", type=float, default=1.0)
@@ -1066,9 +1202,22 @@ def build_parser() -> argparse.ArgumentParser:
     agent_parser.add_argument(
         "agent_subcommand",
         nargs="?",
-        choices=("console", "explain-policy", "forecast", "control-center"),
+        choices=(
+            "console",
+            "explain-policy",
+            "sandbox-explain",
+            "forecast",
+            "control-center",
+            "failover-state",
+            "mission-graph",
+            "replay-certify",
+            "chaos-certify",
+        ),
         default="console",
-        help="Agent surface: console (default), explain-policy, forecast, or control-center",
+        help=(
+            "Agent surface: console (default), explain-policy, sandbox-explain, "
+            "forecast, control-center, failover-state, mission-graph, replay-certify, chaos-certify"
+        ),
     )
     agent_parser.add_argument(
         "--control-mode",
@@ -1093,6 +1242,28 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         dest="as_json",
         help="Emit JSON for explain-policy/forecast/control-center surfaces",
+    )
+    agent_parser.add_argument(
+        "--action",
+        default="status_check",
+        help="Action to evaluate for sandbox-explain (for example: status_check, compose_up, restart_service:wicap-ui)",
+    )
+    agent_parser.add_argument(
+        "--mode",
+        choices=("monitor", "observe", "assist", "autonomous"),
+        default="observe",
+        help="Control mode context for sandbox-explain",
+    )
+    agent_parser.add_argument(
+        "--profile",
+        default="default",
+        help="Profile selector used by replay-certify/chaos-certify",
+    )
+    agent_parser.add_argument(
+        "--run-id",
+        type=int,
+        default=0,
+        help="Mission run id for mission-graph inspection",
     )
 
     return parser
@@ -1365,6 +1536,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 stale_days=max(1, int(args.stale_days)),
                 max_decision_rows=max(1, int(args.max_decision_rows)),
                 max_session_rows=max(1, int(args.max_session_rows)),
+                max_recent_transitions=max(1, int(args.max_recent_transitions)),
                 prune_stale=bool(args.prune_stale),
             )
             output_path = write_memory_maintenance_report(report, Path(args.output))
@@ -1524,6 +1696,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         if subcommand == "explain-policy":
             return _run_agent_explain_policy(as_json=bool(args.as_json))
+        if subcommand == "sandbox-explain":
+            return _run_agent_sandbox_explain(
+                action=str(args.action),
+                mode=str(args.mode),
+                as_json=bool(args.as_json),
+            )
         if subcommand == "forecast":
             return _run_agent_forecast(
                 db_path,
@@ -1535,6 +1713,29 @@ def main(argv: Sequence[str] | None = None) -> int:
                 db_path,
                 control_mode=normalized_mode,
                 lookback_hours=max(1, int(args.lookback_hours)),
+                as_json=bool(args.as_json),
+            )
+        if subcommand == "failover-state":
+            return _run_agent_failover_state(
+                db_path,
+                as_json=bool(args.as_json),
+            )
+        if subcommand == "mission-graph":
+            return _run_agent_mission_graph(
+                db_path,
+                run_id=max(0, int(args.run_id)),
+                as_json=bool(args.as_json),
+            )
+        if subcommand == "replay-certify":
+            return _run_agent_replay_certify(
+                db_path,
+                profile=str(args.profile),
+                as_json=bool(args.as_json),
+            )
+        if subcommand == "chaos-certify":
+            return _run_agent_chaos_certify(
+                db_path,
+                profile=str(args.profile),
                 as_json=bool(args.as_json),
             )
         parser.error(f"Unknown agent subcommand: {subcommand}")

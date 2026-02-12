@@ -20,6 +20,7 @@ class ActuatorResult:
     status: str
     commands: list[list[str]]
     detail: str
+    policy_trace: dict[str, object] | None = None
 
 
 def _status_script_path(repo_root: Path) -> Path | None:
@@ -74,12 +75,21 @@ def run_allowlisted_action(
         return ActuatorResult(status="rejected", commands=[], detail=f"unknown action: {action}")
 
     policy = plane_policy or ControlPlanePolicy.from_env()
-    plane_decision = policy.evaluate(action_name=action_name)
+    plane_decision = policy.evaluate(
+        action_name=action_name,
+        mode=str(mode),
+        record_usage=str(mode).strip().lower() in {"assist", "autonomous"},
+    )
     if not plane_decision.allowed:
         detail = plane_decision.reason
         if plane_decision.denied_by:
             detail = f"{plane_decision.denied_by}: {detail}"
-        return ActuatorResult(status="rejected", commands=[], detail=detail)
+        return ActuatorResult(
+            status="rejected",
+            commands=[],
+            detail=detail,
+            policy_trace=dict(plane_decision.policy_trace),
+        )
 
     if action_name == "status_check":
         script = _status_script_path(repo_root)
@@ -112,6 +122,7 @@ def run_allowlisted_action(
             status="skipped_observe_mode",
             commands=commands,
             detail="observe mode: action not executed",
+            policy_trace=dict(plane_decision.policy_trace),
         )
 
     details: list[str] = []
@@ -128,6 +139,7 @@ def run_allowlisted_action(
                 status="executed_fail",
                 commands=commands,
                 detail=f"{type(exc).__name__}: {exc}",
+                policy_trace=dict(plane_decision.policy_trace),
             )
         if detail:
             details.append(detail)
@@ -136,6 +148,12 @@ def run_allowlisted_action(
                 status="executed_fail",
                 commands=commands,
                 detail=" | ".join(details),
+                policy_trace=dict(plane_decision.policy_trace),
             )
 
-    return ActuatorResult(status="executed_ok", commands=commands, detail=" | ".join(details))
+    return ActuatorResult(
+        status="executed_ok",
+        commands=commands,
+        detail=" | ".join(details),
+        policy_trace=dict(plane_decision.policy_trace),
+    )
