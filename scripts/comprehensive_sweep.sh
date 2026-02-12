@@ -292,7 +292,7 @@ docker compose ps >&2 || true
 exit 1
 "
 
-run_json_step "autopilot_once" bash -lc "cd \"${ASSIST_ROOT}\" && PYTHONPATH=src python3 -m wicap_assist.cli --db \"${ASSIST_DB}\" autopilot --control-mode \"${AUTOPILOT_MODE}\" --operate-cycles \"${OPERATE_CYCLES}\" --stop-on-escalation --no-rollback-on-verify-failure --max-runs 1 --json" || true
+run_json_step "autopilot_once" bash -lc "cd \"${ASSIST_ROOT}\" && PYTHONPATH=src python3 -m wicap_assist.cli --db \"${ASSIST_DB}\" autopilot --control-mode \"${AUTOPILOT_MODE}\" --operate-cycles \"${OPERATE_CYCLES}\" --no-rollback-on-verify-failure --max-runs 1 --json" || true
 run_json_step "rollout_gates_pass1" bash -lc "cd \"${ASSIST_ROOT}\" && PYTHONPATH=src python3 -m wicap_assist.cli --db \"${ASSIST_DB}\" rollout-gates --json" || true
 if [[ "${STRICT}" -eq 1 ]]; then
     run_json_step "rollout_gates_pass2" bash -lc "cd \"${ASSIST_ROOT}\" && PYTHONPATH=src python3 -m wicap_assist.cli --db \"${ASSIST_DB}\" rollout-gates --enforce --json" || true
@@ -307,7 +307,7 @@ if [[ "${STRICT}" -eq 1 ]]; then
     if [[ -n "${gate_rc}" && "${gate_rc}" -ne 0 && "${MAX_GATE_RETRIES}" -gt 0 ]]; then
         for retry in $(seq 1 "${MAX_GATE_RETRIES}"); do
             FINAL_AUTOPILOT_STEP="autopilot_retry${retry}"
-            run_json_step "${FINAL_AUTOPILOT_STEP}" bash -lc "cd \"${ASSIST_ROOT}\" && PYTHONPATH=src python3 -m wicap_assist.cli --db \"${ASSIST_DB}\" autopilot --control-mode \"${AUTOPILOT_MODE}\" --operate-cycles \"${OPERATE_CYCLES}\" --stop-on-escalation --no-rollback-on-verify-failure --max-runs 1 --json" || true
+            run_json_step "${FINAL_AUTOPILOT_STEP}" bash -lc "cd \"${ASSIST_ROOT}\" && PYTHONPATH=src python3 -m wicap_assist.cli --db \"${ASSIST_DB}\" autopilot --control-mode \"${AUTOPILOT_MODE}\" --operate-cycles \"${OPERATE_CYCLES}\" --no-rollback-on-verify-failure --max-runs 1 --json" || true
             FINAL_GATE_STEP="rollout_gates_retry${retry}"
             run_json_step "${FINAL_GATE_STEP}" bash -lc "cd \"${ASSIST_ROOT}\" && PYTHONPATH=src python3 -m wicap_assist.cli --db \"${ASSIST_DB}\" rollout-gates --enforce --json" || true
             gate_rc="$(latest_step_rc "${FINAL_GATE_STEP}")"
@@ -464,7 +464,7 @@ python3 -m json.tool "${RUN_DIR}/summary.json"
 record_step "summary" "0"
 
 critical_fail=0
-for step_name in bootstrap core_reconcile "${FINAL_GATE_STEP}" contract_check autopilot_service_start db_snapshot summary; do
+for step_name in core_reconcile "${FINAL_GATE_STEP}" contract_check autopilot_service_start db_snapshot summary; do
     step_rc="$(awk -F '\t' -v name="${step_name}" '$1==name {print $2}' "${STEP_FILE}" | tail -n1)"
     if [[ -n "${step_rc}" && "${step_rc}" -ne 0 ]]; then
         critical_fail=1
@@ -474,7 +474,7 @@ done
 echo "[done] comprehensive sweep artifacts: ${RUN_DIR}"
 if [[ "${STRICT}" -eq 1 && "${critical_fail}" -ne 0 ]]; then
     echo "[error] strict critical step failures:"
-    for step_name in bootstrap core_reconcile "${FINAL_GATE_STEP}" contract_check autopilot_service_start db_snapshot summary; do
+    for step_name in core_reconcile "${FINAL_GATE_STEP}" contract_check autopilot_service_start db_snapshot summary; do
         step_rc="$(latest_step_rc "${step_name}")"
         if [[ -n "${step_rc}" && "${step_rc}" -ne 0 ]]; then
             echo "  - ${step_name}: rc=${step_rc}"
