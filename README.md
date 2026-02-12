@@ -63,11 +63,29 @@ If the `wicap-assist` entrypoint is not on your shell `PATH`, run commands as
 `PYTHONPATH=src python -m wicap_assist.cli <command> ...`.
 
 ## Fresh System Bootstrap
-Use the assistant to interactively generate/update WiCAP's `.env`:
+Use the assistant to interactively generate/update WiCAP's `.env` for headless hosts:
 ```bash
-wicap-assist setup-wicap-env
+wicap-assist setup-wicap-env --repo-root /opt/wicap
 ```
-This prompts for required runtime values including SQL host/database/user/password and internal secret.
+The wizard now covers:
+- Required boot values (SQL + internal secret + Redis)
+- Headless LAN UI URL (`WICAP_UI_URL`) and capture directory mapping
+- Safe Wi-Fi capture selection with management-interface protection (`wlo1` exclusion by default)
+- Bluetooth sniffer wiring from `/dev/serial/by-id` when enabled
+- Optional queue/dwell/OTLP tuning
+
+It also supports:
+- `--dry-run` to preview `.env` without writing
+- Timestamped `.env` backup before overwrite (disable with `--no-backup`)
+- Final next-step commands for `docker compose up -d --build`
+
+Recommended first-run sequence on a new server:
+```bash
+wicap-assist setup-wicap-env --repo-root /opt/wicap
+cd /opt/wicap
+docker compose up -d --build
+docker compose ps
+```
 
 ## Live Control Quickstart
 Preflight runtime contract:
@@ -185,7 +203,7 @@ Data is stored in `./data/assistant.db`.
 
 ## Command Reference
 - `wicap-assist ingest [--scan-codex] [--scan-soaks] [--scan-harness] [--scan-network-events] [--scan-antigravity] [--scan-changelog]`
-- `wicap-assist setup-wicap-env [--repo-root <path>] [--env-file <file>] [--yes]`
+- `wicap-assist setup-wicap-env [--repo-root <path>] [--env-file <file>] [--yes] [--dry-run] [--no-backup]`
 - `wicap-assist triage "<query>"`
 - `wicap-assist bundle <target> [--json]`
 - `wicap-assist incident <target> [--json-input <file>] [--overwrite]`

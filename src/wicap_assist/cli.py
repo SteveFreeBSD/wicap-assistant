@@ -670,6 +670,16 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Skip final confirmation prompt and write immediately",
     )
+    setup_env_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Render planned .env content without writing the file",
+    )
+    setup_env_parser.add_argument(
+        "--no-backup",
+        action="store_true",
+        help="Do not create timestamped .env backup before overwriting",
+    )
 
     triage_parser = subparsers.add_parser("triage", help="Search stored signals")
     triage_parser.add_argument("query", help="Search phrase")
@@ -975,6 +985,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 repo_root=args.repo_root or wicap_repo_root(),
                 env_path=args.env_file,
                 assume_yes=bool(args.yes),
+                dry_run=bool(args.dry_run),
+                backup_existing=not bool(args.no_backup),
             )
         except SetupAbortedError as exc:
             print(str(exc))
@@ -988,7 +1000,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(
             "WiCAP env setup complete: "
             f"path={report['env_path']} "
-            f"changed_keys={len(report.get('changed_keys', []))}"
+            f"changed_keys={len(report.get('changed_keys', []))} "
+            f"dry_run={bool(report.get('dry_run', False))}"
         )
         return 0
 

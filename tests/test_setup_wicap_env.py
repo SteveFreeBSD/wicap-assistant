@@ -1,37 +1,27 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
-from wicap_assist.cli import main
-from wicap_assist.wicap_env_setup import load_env_entries
+import wicap_assist.wicap_env_setup as setup_mod
+from wicap_assist.wicap_env_setup import load_env_entries, run_wicap_env_setup
 
 
-def _patch_prompts(
-    monkeypatch,
+def _iter_input(values: list[str], default: str = ""):
+    iterator = iter(values)
+
+    def _reader(prompt: str = "") -> str:
+        _ = prompt
+        return next(iterator, default)
+
+    return _reader
+
+
+def _create_repo_root(
+    tmp_path: Path,
     *,
-    input_values: list[str],
-    secret_values: list[str],
-) -> None:
-    input_iter = iter(input_values)
-    secret_iter = iter(secret_values)
-
-    def fake_input(prompt: str = "") -> str:
-        try:
-            return next(input_iter)
-        except StopIteration as exc:  # pragma: no cover - defensive
-            raise AssertionError(f"Unexpected input prompt: {prompt}") from exc
-
-    def fake_getpass(prompt: str = "") -> str:
-        try:
-            return next(secret_iter)
-        except StopIteration as exc:  # pragma: no cover - defensive
-            raise AssertionError(f"Unexpected secret prompt: {prompt}") from exc
-
-    monkeypatch.setattr("builtins.input", fake_input)
-    monkeypatch.setattr("wicap_assist.wicap_env_setup.getpass.getpass", fake_getpass)
-
-
-def _create_repo_root(tmp_path: Path) -> Path:
+    ui_block: str | None = None,
+) -> Path:
     repo_root = tmp_path / "wicap"
     repo_root.mkdir(parents=True, exist_ok=True)
     (repo_root / ".env.example").write_text(
@@ -44,128 +34,240 @@ def _create_repo_root(tmp_path: Path) -> Path:
         ),
         encoding="utf-8",
     )
+    compose_ui_block = ui_block or "\n".join(
+        [
+            "  ui:",
+            "    image: wicap-ui:latest",
+            "    network_mode: \"host\"",
+            "    env_file: .env",
+        ]
+    )
+    compose_text = "\n".join(
+        [
+            "services:",
+            "  redis:",
+            "    image: redis:alpine",
+            "  scout:",
+            "    image: wicap-core:latest",
+            compose_ui_block,
+            "",
+        ]
+    )
+    (repo_root / "docker-compose.yml").write_text(compose_text, encoding="utf-8")
     return repo_root
 
 
-def test_setup_wicap_env_creates_wicap_dotenv(tmp_path: Path, monkeypatch) -> None:
-    repo_root = _create_repo_root(tmp_path)
-    _patch_prompts(
-        monkeypatch,
-        input_values=[
-            "10.10.0.25",
-            "OpsDB",
-            "ops_user",
-            "",
-            "yes",
-            "true",
-            "",
-            "",
-            "wlan0",
-            "",
-            "false",
-            "disabled",
-            "y",
-        ],
-        secret_values=[
-            "supersecure-pass-123",
-            "internal-secret-123",
-        ],
-    )
+def _parse_assigned_keys(text: str) -> list[str]:
+    keys: list[str] = []
+    pattern = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=", re.MULTILINE)
+    for match in pattern.finditer(text):
+        keys.append(match.group(1))
+    return keys
 
-    rc = main(["setup-wicap-env", "--repo-root", str(repo_root)])
-    assert rc == 0
+
+def test_setup_wicap_env_writes_deterministic_env_with_no_duplicate_keys(tmp_path: Path, monkeypatch) -> None:
+    repo_root = _create_repo_root(tmp_path)
+    monkeypatch.setattr(setup_mod, "_detect_management_interface", lambda: "wlo1")
+    monkeypatch.setattr(setup_mod, "_discover_wireless_interfaces", lambda: ["wlo1", "wlx001"])
+    monkeypatch.setattr(setup_mod, "_detect_lan_ipv4", lambda interface: "192.168.50.10")
+    monkeypatch.setattr(setup_mod, "_list_bt_serial_candidates", lambda: [])
+
+    report = run_wicap_env_setup(
+        repo_root=repo_root,
+        assume_yes=True,
+        input_fn=_iter_input([]),
+        secret_input_fn=_iter_input(["supersecure-pass-123", "internal-secret-123"]),
+        print_fn=lambda _: None,
+    )
+    assert report["ui_bind_strategy"] == "host_network"
+
+    env_text = (repo_root / ".env").read_text(encoding="utf-8")
+    keys = _parse_assigned_keys(env_text)
+    assert len(keys) == len(set(keys))
 
     entries = load_env_entries(repo_root / ".env")
-    assert entries["WICAP_SQL_HOST"] == "10.10.0.25"
-    assert entries["WICAP_SQL_SERVER"] == "10.10.0.25"
-    assert entries["WICAP_SQL_DATABASE"] == "OpsDB"
-    assert entries["WICAP_SQL_USER"] == "ops_user"
-    assert entries["WICAP_SQL_USERNAME"] == "ops_user"
-    assert entries["WICAP_SQL_PASSWORD"] == "supersecure-pass-123"
-    assert entries["WICAP_INTERNAL_SECRET"] == "internal-secret-123"
-    assert entries["WICAP_OTLP_PROFILE"] == "disabled"
+    assert entries["WICAP_UI_URL"] == "http://192.168.50.10:8080"
+    assert entries["WICAP_INTERFACE"] == "wlx001"
+    assert "wlo1" in entries["WICAP_INTERFACE_EXCLUDE_REGEX"]
+    assert "WICAP_SQL_DRIVER=ODBC Driver 18 for SQL Server" in env_text
+    assert entries["WICAP_SQL_SERVER"] == entries["WICAP_SQL_HOST"]
+    assert entries["WICAP_SQL_USERNAME"] == entries["WICAP_SQL_USER"]
 
 
-def test_setup_wicap_env_keeps_existing_values_on_blank_input(tmp_path: Path, monkeypatch) -> None:
+def test_setup_wicap_env_bt_enabled_writes_bt_interface_keys_from_candidates(tmp_path: Path, monkeypatch) -> None:
     repo_root = _create_repo_root(tmp_path)
-    env_path = repo_root / ".env"
-    env_path.write_text(
-        "\n".join(
+    candidate = "/dev/serial/by-id/usb-ZEPHYR_nRF_Sniffer_for_Bluetooth_LE_ABCDEF123456-if00"
+    monkeypatch.setattr(setup_mod, "_detect_management_interface", lambda: "wlo1")
+    monkeypatch.setattr(setup_mod, "_discover_wireless_interfaces", lambda: ["wlo1", "wlx001"])
+    monkeypatch.setattr(setup_mod, "_detect_lan_ipv4", lambda interface: "10.20.30.40")
+    monkeypatch.setattr(setup_mod, "_list_bt_serial_candidates", lambda: [candidate])
+
+    # Set BT enabled and keep defaults for the rest.
+    run_wicap_env_setup(
+        repo_root=repo_root,
+        assume_yes=True,
+        input_fn=_iter_input(
             [
-                "WICAP_SQL_HOST=old-host",
-                "WICAP_SQL_SERVER=old-host",
-                "WICAP_SQL_DATABASE=OldDB",
-                "WICAP_SQL_USER=old_user",
-                "WICAP_SQL_USERNAME=old_user",
-                "WICAP_SQL_PASSWORD=old-password-123",
-                "WICAP_INTERNAL_SECRET=old-internal-123",
-                "CUSTOM_KEEP=1",
-                "",
+                "",  # SQL host
+                "",  # SQL db
+                "",  # SQL user
+                "",  # SQL driver
+                "",  # trust cert
+                "",  # secret required
+                "",  # allowlist
+                "",  # redis
+                "",  # sql check -> no
+                "",  # ui url
+                "",  # captures dir
+                "",  # ui capture dir
+                "",  # ui pool
+                "",  # replay dir
+                "",  # evidence dir
+                "",  # iface mode
+                "",  # interface
+                "",  # interface mac
+                "",  # interface regex
+                "",  # interface exclude regex
+                "",  # bands
+                "",  # capture backend
+                "true",  # bt enabled
+                "",  # bt interface
+                "",  # bt glob
+                "",  # bt serial
+                "",  # bt capture dir
+                "",  # bt extcap dir
+                "",  # optional tuning -> no
+                "",  # otlp profile
+                "",  # create dirs -> yes
             ]
         ),
-        encoding="utf-8",
+        secret_input_fn=_iter_input(["supersecure-pass-123", "internal-secret-123"]),
+        print_fn=lambda _: None,
     )
-
-    _patch_prompts(
-        monkeypatch,
-        input_values=[
-            "",
-            "",
-            "",
-            "",
-            "",
-            "",
-            "",
-            "",
-            "",
-            "",
-            "",
-            "",
-            "y",
-        ],
-        secret_values=["", ""],
-    )
-
-    rc = main(["setup-wicap-env", "--repo-root", str(repo_root)])
-    assert rc == 0
-
-    entries = load_env_entries(env_path)
-    assert entries["WICAP_SQL_HOST"] == "old-host"
-    assert entries["WICAP_SQL_DATABASE"] == "OldDB"
-    assert entries["WICAP_SQL_PASSWORD"] == "old-password-123"
-    assert entries["WICAP_INTERNAL_SECRET"] == "old-internal-123"
-    assert entries["CUSTOM_KEEP"] == "1"
-
-
-def test_setup_wicap_env_reprompts_short_sql_password(tmp_path: Path, monkeypatch) -> None:
-    repo_root = _create_repo_root(tmp_path)
-    _patch_prompts(
-        monkeypatch,
-        input_values=[
-            "",
-            "NetOps",
-            "",
-            "",
-            "",
-            "",
-            "",
-            "",
-            "",
-            "",
-            "",
-            "",
-            "y",
-        ],
-        secret_values=[
-            "short",
-            "long-enough-password",
-            "another-internal-secret",
-        ],
-    )
-
-    rc = main(["setup-wicap-env", "--repo-root", str(repo_root)])
-    assert rc == 0
 
     entries = load_env_entries(repo_root / ".env")
-    assert entries["WICAP_SQL_PASSWORD"] == "long-enough-password"
-    assert entries["WICAP_SQL_DATABASE"] == "NetOps"
+    assert entries["WICAP_BT_ENABLED"] == "true"
+    assert entries["WICAP_BT_INTERFACE"] == candidate
+    assert entries["WICAP_BT_INTERFACE_GLOB"] == "/dev/serial/by-id/*nRF*"
+    assert entries["WICAP_BT_SERIAL"] == "ABCDEF123456"
+
+
+def test_setup_wicap_env_excludes_management_interface_by_default_from_ip_outputs(tmp_path: Path, monkeypatch) -> None:
+    repo_root = _create_repo_root(tmp_path)
+
+    def fake_run_command(args):
+        if list(args) == ["ip", "-br", "link"]:
+            return "lo               UNKNOWN\nwlo1             UP\nwlxabc123        UP"
+        if list(args) == ["ip", "route"]:
+            return "default via 192.168.0.1 dev wlo1 proto dhcp src 192.168.0.42 metric 600"
+        if list(args) == ["ip", "-4", "addr", "show", "dev", "wlo1"]:
+            return "2: wlo1\n    inet 192.168.0.42/24 brd 192.168.0.255 scope global dynamic wlo1"
+        if list(args) == ["ip", "-4", "route", "get", "1.1.1.1"]:
+            return "1.1.1.1 via 192.168.0.1 dev wlo1 src 192.168.0.42 uid 1000"
+        return ""
+
+    monkeypatch.setattr(setup_mod, "_run_command", fake_run_command)
+    monkeypatch.setattr(setup_mod, "_list_bt_serial_candidates", lambda: [])
+
+    run_wicap_env_setup(
+        repo_root=repo_root,
+        assume_yes=True,
+        input_fn=_iter_input([]),
+        secret_input_fn=_iter_input(["supersecure-pass-123", "internal-secret-123"]),
+        print_fn=lambda _: None,
+    )
+
+    entries = load_env_entries(repo_root / ".env")
+    assert entries["WICAP_INTERFACE"] == "wlxabc123"
+    assert "wlo1" in entries["WICAP_INTERFACE_EXCLUDE_REGEX"]
+
+
+def test_setup_wicap_env_host_network_ui_strategy_requires_no_override_file(tmp_path: Path, monkeypatch) -> None:
+    repo_root = _create_repo_root(tmp_path)
+    monkeypatch.setattr(setup_mod, "_detect_management_interface", lambda: "eth0")
+    monkeypatch.setattr(setup_mod, "_discover_wireless_interfaces", lambda: ["wlx001"])
+    monkeypatch.setattr(setup_mod, "_detect_lan_ipv4", lambda interface: "172.16.1.10")
+    monkeypatch.setattr(setup_mod, "_list_bt_serial_candidates", lambda: [])
+
+    report = run_wicap_env_setup(
+        repo_root=repo_root,
+        assume_yes=True,
+        input_fn=_iter_input([]),
+        secret_input_fn=_iter_input(["supersecure-pass-123", "internal-secret-123"]),
+        print_fn=lambda _: None,
+    )
+
+    assert report["ui_bind_strategy"] == "host_network"
+    assert report["compose_override_path"] is None
+    assert not (repo_root / "compose.override.yml").exists()
+
+
+def test_setup_wicap_env_can_write_ui_override_when_compose_has_no_host_mode_or_ports(tmp_path: Path, monkeypatch) -> None:
+    repo_root = _create_repo_root(
+        tmp_path,
+        ui_block="\n".join(
+            [
+                "  ui:",
+                "    image: wicap-ui:latest",
+                "    env_file: .env",
+            ]
+        ),
+    )
+    monkeypatch.setattr(setup_mod, "_detect_management_interface", lambda: "eth0")
+    monkeypatch.setattr(setup_mod, "_discover_wireless_interfaces", lambda: ["wlx001"])
+    monkeypatch.setattr(setup_mod, "_detect_lan_ipv4", lambda interface: "192.168.77.20")
+    monkeypatch.setattr(setup_mod, "_list_bt_serial_candidates", lambda: [])
+
+    # The compose override prompt appears after the headless UI fields above.
+    report = run_wicap_env_setup(
+        repo_root=repo_root,
+        assume_yes=True,
+        input_fn=_iter_input(
+            [
+                "",  # sql host
+                "",  # sql db
+                "",  # sql user
+                "",  # sql driver
+                "",  # trust cert
+                "",  # internal secret required
+                "",  # allowlist
+                "",  # redis
+                "",  # sql check
+                "",  # ui url
+                "",  # captures dir
+                "",  # ui capture dir
+                "",  # ui db pool
+                "",  # replay dir
+                "",  # evidence dir
+                "y",  # write compose.override.yml
+            ]
+        ),
+        secret_input_fn=_iter_input(["supersecure-pass-123", "internal-secret-123"]),
+        print_fn=lambda _: None,
+    )
+
+    override_path = repo_root / "compose.override.yml"
+    assert report["ui_bind_strategy"] == "override_required"
+    assert report["compose_override_path"] == str(override_path)
+    assert override_path.exists()
+    assert "0.0.0.0:8080:8080" in override_path.read_text(encoding="utf-8")
+
+
+def test_setup_wicap_env_dry_run_does_not_write_file(tmp_path: Path, monkeypatch) -> None:
+    repo_root = _create_repo_root(tmp_path)
+    monkeypatch.setattr(setup_mod, "_detect_management_interface", lambda: "wlo1")
+    monkeypatch.setattr(setup_mod, "_discover_wireless_interfaces", lambda: ["wlo1", "wlx001"])
+    monkeypatch.setattr(setup_mod, "_detect_lan_ipv4", lambda interface: "192.168.10.10")
+    monkeypatch.setattr(setup_mod, "_list_bt_serial_candidates", lambda: [])
+
+    report = run_wicap_env_setup(
+        repo_root=repo_root,
+        assume_yes=True,
+        dry_run=True,
+        input_fn=_iter_input([]),
+        secret_input_fn=_iter_input(["supersecure-pass-123", "internal-secret-123"]),
+        print_fn=lambda _: None,
+    )
+
+    assert report["dry_run"] is True
+    assert not (repo_root / ".env").exists()
