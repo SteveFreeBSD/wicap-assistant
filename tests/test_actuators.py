@@ -59,7 +59,7 @@ def test_shutdown_executes_stop_script_then_compose_down(tmp_path: Path) -> None
     assert any(cmd[:4] == ["docker", "compose", "down", "--remove-orphans"] for cmd in calls)
 
 
-def test_restart_service_executes_allowlisted_compose_restart(tmp_path: Path) -> None:
+def test_restart_service_executes_allowlisted_container_restart(tmp_path: Path) -> None:
     repo = tmp_path / "wicap"
     calls: list[list[str]] = []
 
@@ -75,8 +75,27 @@ def test_restart_service_executes_allowlisted_compose_restart(tmp_path: Path) ->
     )
 
     assert result.status == "executed_ok"
-    assert result.commands == [["docker", "compose", "restart", "wicap-ui"]]
-    assert calls == [["docker", "compose", "restart", "wicap-ui"]]
+    assert result.commands == [["docker", "restart", "wicap-ui"]]
+    assert calls == [["docker", "restart", "wicap-ui"]]
+
+
+def test_restart_service_accepts_compose_service_alias(tmp_path: Path) -> None:
+    repo = tmp_path / "wicap"
+    calls: list[list[str]] = []
+
+    def fake_runner(cmd, cwd, capture_output, text, check, timeout):  # type: ignore[no-untyped-def]
+        calls.append(list(cmd))
+        return _DummyResult(0, stdout="ok")
+
+    result = run_allowlisted_action(
+        action="restart_service:ui",
+        mode="assist",
+        repo_root=repo,
+        runner=fake_runner,
+    )
+
+    assert result.status == "executed_ok"
+    assert calls == [["docker", "restart", "wicap-ui"]]
 
 
 def test_restart_service_rejects_unknown_service(tmp_path: Path) -> None:

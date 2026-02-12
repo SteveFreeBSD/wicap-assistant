@@ -13,6 +13,12 @@ from wicap_assist.util.redact import to_snippet
 
 Runner = Callable[..., subprocess.CompletedProcess[str]]
 ALLOWED_RESTART_SERVICES = {"wicap-ui", "wicap-processor", "wicap-scout", "wicap-redis"}
+RESTART_SERVICE_ALIASES = {
+    "ui": "wicap-ui",
+    "processor": "wicap-processor",
+    "scout": "wicap-scout",
+    "redis": "wicap-redis",
+}
 
 
 @dataclass(slots=True)
@@ -102,14 +108,18 @@ def run_allowlisted_action(
     elif action_name == "compose_up":
         commands = [["docker", "compose", "up", "-d"]]
     elif action_name == "restart_service":
-        service = str(restart_service or "").strip()
+        service = str(restart_service or "").strip().lower()
+        service = RESTART_SERVICE_ALIASES.get(service, service)
         if service not in ALLOWED_RESTART_SERVICES:
             return ActuatorResult(
                 status="rejected",
                 commands=[],
                 detail=f"unknown restart service: {service or '<missing>'}",
             )
-        commands = [["docker", "compose", "restart", service]]
+        # Use container restart here because probes and control ladders operate on
+        # deterministic container names (wicap-*) while compose service keys are
+        # short aliases (ui/processor/scout/redis).
+        commands = [["docker", "restart", service]]
     else:
         stop_script = repo_root / "scripts" / "stop_wicap.py"
         commands = []

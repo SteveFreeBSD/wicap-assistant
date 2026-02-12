@@ -105,7 +105,7 @@ def test_control_policy_assist_mode_executes_allowlisted_actions(tmp_path: Path)
         ("check_wicap_status.py" in " ".join(cmd) or "scripts.check_wicap_status" in " ".join(cmd))
         for cmd in calls
     )
-    assert any(cmd[:3] == ["docker", "compose", "restart"] for cmd in calls)
+    assert any(cmd[:2] == ["docker", "restart"] for cmd in calls)
 
 
 def test_control_policy_escalates_after_max_recover_attempts(tmp_path: Path) -> None:
@@ -186,7 +186,7 @@ def test_control_policy_uses_service_specific_ladder_thresholds(tmp_path: Path) 
     assert isinstance(detail, dict)
     assert int(detail.get("recover_threshold", 0)) == 1
     assert int(detail.get("max_recover_attempts", 0)) == 1
-    assert any(cmd[:3] == ["docker", "compose", "restart"] for cmd in calls)
+    assert any(cmd[:2] == ["docker", "restart"] for cmd in calls)
 
 
 def test_control_policy_autonomous_kill_switch_escalates(tmp_path: Path, monkeypatch) -> None:
@@ -230,7 +230,7 @@ def test_control_policy_autonomous_runs_rollback_sequence_after_failed_recovery(
 
     def fail_recover_then_rollback(cmd, cwd, capture_output, text, check, timeout):  # type: ignore[no-untyped-def]
         calls.append(list(cmd))
-        if cmd[:3] == ["docker", "compose", "restart"]:
+        if cmd[:2] == ["docker", "restart"]:
             return _DummyResult(1, stderr="restart failed")
         return _DummyResult(0, stdout="ok")
 
