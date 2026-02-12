@@ -11,7 +11,7 @@ RUN_LOG="${REPORT_DIR}/memory_maintenance_last_run.json"
 
 mkdir -p "${REPORT_DIR}"
 
-PYTHONPATH=src python -m wicap_assist.cli \
+PYTHONPATH=src python3 -m wicap_assist.cli \
   --db "${DB_PATH}" \
   memory-maintenance \
   --prune-stale \

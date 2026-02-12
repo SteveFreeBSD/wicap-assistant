@@ -51,7 +51,7 @@ Define the deterministic checks that must pass before release freezes or major c
 - `tests/test_docs_contract.py`
   - Authority hierarchy and guardrail text are present and consistent.
 
-### Certification scaffolds
+### Certification Harnesses
 - `tests/replay/test_replay_certification.py`
   - Replay certification runs deterministic fixture-case replays (`tests/replay/fixtures/default.json`) and writes certification records.
 - `tests/chaos/test_chaos_certification.py`

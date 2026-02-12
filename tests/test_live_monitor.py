@@ -433,6 +433,20 @@ def test_live_assist_mode_records_control_events(tmp_path: Path, monkeypatch) ->
     metadata_payload = json.loads(str(metadata_row["metadata_json"]))
     assert "working_memory" in metadata_payload
     assert isinstance(metadata_payload["working_memory"], dict)
+    assert str(metadata_payload.get("mission_run_id", "")).startswith("live-")
+    assert int(metadata_payload.get("mission_steps_recorded", 0)) >= int(event_count)
+
+    mission_row = conn.execute(
+        "SELECT id, run_id, status FROM mission_runs ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    assert mission_row is not None
+    assert str(mission_row["run_id"]).startswith("live-")
+    assert str(mission_row["status"]) in {"completed", "escalated", "failed", "interrupted"}
+    illegal_transitions = conn.execute(
+        "SELECT count(*) FROM mission_steps WHERE mission_run_id = ? AND status = 'illegal_transition'",
+        (int(mission_row["id"]),),
+    ).fetchone()[0]
+    assert int(illegal_transitions) == 0
 
     conn.close()
 

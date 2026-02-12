@@ -92,7 +92,7 @@
 - Implemented failover profile persistence baseline (`failover_events`, `auth_profile_state`) and `agent failover-state` snapshot surface.
 - Implemented command-center and forecast CLI surfaces (`agent control-center`, `agent forecast`) for operator-grade runtime context.
 - Implemented mission graph persistence (`mission_runs`, `mission_steps`) and `agent mission-graph` snapshot surface.
-- Implemented certification scaffolds (`agent replay-certify`, `agent chaos-certify`) with persisted `certification_runs`.
+- Implemented deterministic certification harnesses (`agent replay-certify`, `agent chaos-certify`) with persisted `certification_runs`.
 - Implemented sidecar-intel readiness hooks in status surfaces and contract fixtures for additive rollout-gated adoption.
 
 ## Active Program Plan

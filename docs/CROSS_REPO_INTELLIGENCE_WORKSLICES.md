@@ -58,7 +58,7 @@ Canonical chain: `ASSISTANT_MISSION.md` -> `ASSISTANT_ROADMAP.md` -> this file
 ## 0.1 Next-Gen Execution Track (WS-01 .. WS-14)
 - WS-01 Policy Explain Surface: Implemented baseline (`agent explain-policy`, control-plane explain fields in WiCAP control-intent/status paths).
 - WS-02 Deterministic Failover Profiles: Implemented baseline deterministic ladders/cooldowns/rollback ceilings; profile tuning remains deployment-specific.
-- WS-03 Sidecar Intel Worker: Implemented compose/profile + worker scaffold (`intel-worker`) with fail-open artifact generation.
+- WS-03 Sidecar Intel Worker: Implemented compose/profile + worker runtime (`intel-worker`) with fail-open artifact generation.
 - WS-04 Multi-Detector Shadow Scoring: Implemented additive anomaly-v2 score fields (`primary_score`, `shadow_scores`, `model_votes`, `vote_agreement`, `score_components`).
 - WS-05 Drift + Calibration Loop v2: Implemented drift-state emission + assistant drift ingest/store/guidance surfaces.
 - WS-06 Prediction Contract + Forecast Engine: Implemented `wicap.prediction.v1` contract + assistant forecast surfaces.
@@ -81,7 +81,7 @@ Canonical chain: `ASSISTANT_MISSION.md` -> `ASSISTANT_ROADMAP.md` -> this file
 - Implemented failover persistence baseline:
   - assistant DB tables `failover_events` and `auth_profile_state` + `agent failover-state` surface.
   - WiCAP API adds `/api/system/failover-state`.
-- Implemented mission graph + certification scaffolding:
+- Implemented mission graph + certification runtime:
   - assistant DB tables `mission_runs`, `mission_steps`, `certification_runs`.
   - soak runs now persist mission graph snapshots.
   - assistant CLI adds `agent mission-graph`, `agent replay-certify`, `agent chaos-certify`.

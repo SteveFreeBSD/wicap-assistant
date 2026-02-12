@@ -89,6 +89,7 @@ from wicap_assist.runtime_contract import (
     runtime_contract_report_to_json,
 )
 from wicap_assist.rollup import format_rollup_text, generate_rollup, rollup_to_json
+from wicap_assist.scheduler_runtime import run_scheduler_loop
 from wicap_assist.soak_run import run_supervised_soak
 from wicap_assist.settings import wicap_repo_root
 from wicap_assist.wicap_env_setup import SetupAbortedError, run_wicap_env_setup, validate_wicap_env
@@ -1030,6 +1031,92 @@ def build_parser() -> argparse.ArgumentParser:
     )
     maintenance_parser.add_argument("--json", action="store_true", dest="as_json", help="Emit JSON output")
 
+    scheduler_parser = subparsers.add_parser(
+        "scheduler",
+        help="Run lease-guarded heartbeat + cron loop for live control and maintenance",
+    )
+    scheduler_parser.add_argument(
+        "--owner",
+        default=None,
+        help="Lease owner id (default: <hostname>:<pid>)",
+    )
+    scheduler_parser.add_argument(
+        "--lock-dir",
+        type=Path,
+        default=Path("data/locks"),
+        help="Directory for scheduler lease lock files",
+    )
+    scheduler_parser.add_argument(
+        "--state-path",
+        type=Path,
+        default=None,
+        help="Scheduler state JSON path (default: <lock-dir>/scheduler_state.json)",
+    )
+    scheduler_parser.add_argument(
+        "--control-mode",
+        choices=("monitor", "observe", "assist", "autonomous"),
+        default="observe",
+        help="Heartbeat control mode (monitor aliases observe)",
+    )
+    scheduler_parser.add_argument(
+        "--heartbeat-interval-seconds",
+        type=float,
+        default=10.0,
+        help="Heartbeat loop interval in seconds",
+    )
+    scheduler_parser.add_argument(
+        "--heartbeat-lease-seconds",
+        type=int,
+        default=20,
+        help="Heartbeat lease duration in seconds",
+    )
+    scheduler_parser.add_argument(
+        "--memory-maintenance-interval-seconds",
+        type=int,
+        default=900,
+        help="Cron interval for memory maintenance",
+    )
+    scheduler_parser.add_argument(
+        "--rollout-gates-interval-seconds",
+        type=int,
+        default=300,
+        help="Cron interval for rollout gate snapshots",
+    )
+    scheduler_parser.add_argument(
+        "--rollout-history-file",
+        type=Path,
+        default=Path("data/reports/rollout_gates_history.jsonl"),
+        help="Append rollout gate snapshots to this JSONL file",
+    )
+    scheduler_parser.add_argument(
+        "--memory-report-output",
+        type=Path,
+        default=Path("data/reports/memory_maintenance_latest.json"),
+        help="Write latest memory maintenance report to this path",
+    )
+    scheduler_parser.add_argument(
+        "--no-memory-prune-stale",
+        action="store_true",
+        help="Disable stale working-memory pruning in scheduler maintenance runs",
+    )
+    scheduler_parser.add_argument(
+        "--once",
+        action="store_true",
+        help="Run one scheduler iteration and exit",
+    )
+    scheduler_parser.add_argument(
+        "--max-iterations",
+        type=int,
+        default=None,
+        help="Maximum loop iterations before exit (default: unbounded)",
+    )
+    scheduler_parser.add_argument(
+        "--stop-on-escalation",
+        action="store_true",
+        help="Use stop-on-escalation behavior for heartbeat live cycle",
+    )
+    scheduler_parser.add_argument("--json", action="store_true", dest="as_json", help="Emit JSON output")
+
     rollout_parser = subparsers.add_parser(
         "rollout-gates",
         help="Evaluate deterministic autonomous rollout/canary promotion gates",
@@ -1556,6 +1643,54 @@ def main(argv: Sequence[str] | None = None) -> int:
                 f"avg_reward={report['avg_reward']}"
             )
             print(f"Report written: {output_path}")
+        return 0
+
+    if args.command == "scheduler":
+        conn = connect_db(db_path)
+        try:
+            report = run_scheduler_loop(
+                conn,
+                owner=args.owner,
+                lock_dir=Path(args.lock_dir),
+                state_path=Path(args.state_path) if args.state_path is not None else None,
+                control_mode=_normalize_control_mode(str(args.control_mode)),
+                heartbeat_interval_seconds=max(0.1, float(args.heartbeat_interval_seconds)),
+                heartbeat_lease_seconds=max(1, int(args.heartbeat_lease_seconds)),
+                memory_maintenance_interval_seconds=max(0, int(args.memory_maintenance_interval_seconds)),
+                rollout_gates_interval_seconds=max(0, int(args.rollout_gates_interval_seconds)),
+                rollout_history_file=Path(args.rollout_history_file),
+                memory_report_output=Path(args.memory_report_output),
+                memory_prune_stale=not bool(args.no_memory_prune_stale),
+                once=bool(args.once),
+                max_iterations=(
+                    max(1, int(args.max_iterations))
+                    if args.max_iterations is not None
+                    else None
+                ),
+                stop_on_escalation=bool(args.stop_on_escalation),
+            )
+        finally:
+            conn.close()
+        if args.as_json:
+            import json as _json
+
+            print(_json.dumps(report, sort_keys=True))
+        else:
+            print(
+                "Scheduler: "
+                f"iterations={report['iterations']} "
+                f"heartbeat_executed={report['heartbeat_executed']} "
+                f"heartbeat_skipped={report['heartbeat_skipped']} "
+                f"heartbeat_escalations={report['heartbeat_escalations']}"
+            )
+            print(
+                "Cron: "
+                f"memory-maintenance executed={report['cron_executed']['memory-maintenance']} "
+                f"skipped={report['cron_skipped']['memory-maintenance']}; "
+                f"rollout-gates executed={report['cron_executed']['rollout-gates']} "
+                f"skipped={report['cron_skipped']['rollout-gates']}"
+            )
+            print(f"State path: {report['state_path']}")
         return 0
 
     if args.command == "rollout-gates":

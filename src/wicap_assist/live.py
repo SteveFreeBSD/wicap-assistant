@@ -41,6 +41,11 @@ from wicap_assist.guardian import (
     scan_guardian_once,
 )
 from wicap_assist.known_issues import match_known_issue
+from wicap_assist.mission_graph import (
+    finalize_live_mission_run,
+    record_live_mission_step,
+    start_live_mission_run,
+)
 from wicap_assist.playbooks import default_playbooks_dir
 from wicap_assist.probes import probe_docker, probe_http_health, probe_network
 from wicap_assist.policy_explain import collect_policy_explain
@@ -752,6 +757,33 @@ def run_live_monitor(
         )
     conn.commit()
 
+    mission_state = start_live_mission_run(
+        conn,
+        control_session_id=int(control_session_id),
+        mode=str(control_mode),
+        started_ts=started_ts,
+        metadata_json={
+            "repo_root": str(active_repo_root),
+            "policy_profile": resolved_profile_name,
+            "resumed_session": bool(resumed),
+        },
+    )
+    mission_run_id = int(mission_state["mission_run_id"])
+    mission_run_key = str(mission_state["run_id"])
+    mission_last_step = str(mission_state.get("last_step", "observe") or "observe")
+    mission_step_index = int(mission_state.get("next_step_index", 0))
+    mission_transition_violations = 0
+    update_control_session(
+        conn,
+        control_session_id=int(control_session_id),
+        metadata_json={
+            "mission_run_id": mission_run_key,
+            "mission_graph_id": "wicap-live-control-v1",
+            "mission_graph_resumed": bool(mission_state.get("resumed", False)),
+        },
+    )
+    conn.commit()
+
     return_code = 0
     final_status = "completed" if bool(once) else "interrupted"
     total_observations = 0
@@ -823,6 +855,36 @@ def run_live_monitor(
                     detail_payload = {}
                 detail_payload = dict(detail_payload)
                 detail_payload["shadow_ranker"] = shadow_ranker
+
+                previous_mission_step = mission_last_step
+                mission_step = record_live_mission_step(
+                    conn,
+                    mission_run_id=int(mission_run_id),
+                    run_id=mission_run_key,
+                    last_step=previous_mission_step,
+                    ts=ts,
+                    decision=decision,
+                    action=action,
+                    status=status,
+                    detail_json={
+                        "control_session_id": int(control_session_id),
+                        "observation_cycle": int(total_observations) + 1,
+                    },
+                    step_index=int(mission_step_index),
+                )
+                mission_step_index += 1
+                mission_last_step = str(mission_step.get("next_step", mission_last_step))
+                transition_ok = bool(mission_step.get("transition_ok", False))
+                if not transition_ok:
+                    mission_transition_violations += 1
+                    escalated = True
+                detail_payload["mission"] = {
+                    "run_id": mission_run_key,
+                    "step_type": mission_step.get("step_type"),
+                    "transition_ok": transition_ok,
+                    "terminal_state": bool(mission_step.get("terminal_state", False)),
+                    "previous_step": previous_mission_step,
+                }
                 event["detail_json"] = detail_payload
                 episode_id = insert_control_episode(
                     conn,
@@ -1018,6 +1080,10 @@ def run_live_monitor(
                     "control_events": int(total_control_events),
                     "working_memory": working_memory_state,
                     "policy_explain": policy_snapshot,
+                    "mission_run_id": mission_run_key,
+                    "mission_steps_recorded": int(mission_step_index),
+                    "mission_last_step": mission_last_step,
+                    "mission_transition_violations": int(mission_transition_violations),
                 },
             )
             conn.commit()
@@ -1049,7 +1115,7 @@ def run_live_monitor(
                 break
 
             if once:
-                final_status = "completed"
+                final_status = "escalated" if escalated else "completed"
                 break
 
             try:
@@ -1060,6 +1126,24 @@ def run_live_monitor(
                 break
     finally:
         ended_ts = _utc_now_iso()
+        mission_final_status = str(final_status)
+        if mission_transition_violations > 0 and mission_final_status == "completed":
+            mission_final_status = "failed"
+        finalize_live_mission_run(
+            conn,
+            mission_run_id=int(mission_run_id),
+            status=mission_final_status,
+            ended_ts=ended_ts,
+            metadata_json={
+                "control_session_id": int(control_session_id),
+                "observations": int(total_observations),
+                "control_events": int(total_control_events),
+                "transition_violations": int(mission_transition_violations),
+                "steps_recorded": int(mission_step_index),
+                "final_step": mission_last_step,
+                "return_code": int(return_code),
+            },
+        )
         update_control_session(
             conn,
             control_session_id=int(control_session_id),
@@ -1081,6 +1165,11 @@ def run_live_monitor(
                 "control_rollback_actions": resolved_rollback_actions,
                 "control_rollback_max_attempts": int(policy.rollback_max_attempts or 1),
                 "policy_explain": policy_snapshot,
+                "mission_run_id": mission_run_key,
+                "mission_steps_recorded": int(mission_step_index),
+                "mission_last_step": mission_last_step,
+                "mission_transition_violations": int(mission_transition_violations),
+                "mission_status": mission_final_status,
             },
         )
         insert_control_session_event(

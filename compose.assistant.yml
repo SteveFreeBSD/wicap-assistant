@@ -59,16 +59,18 @@ services:
     volumes:
       - ./data:/app/data
       - ${WICAP_HOST_REPO_ROOT:-../wicap}:/wicap:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     command:
       [
-        "memory-maintenance",
-        "--lookback-days",
-        "14",
-        "--stale-days",
-        "7",
-        "--max-recent-transitions",
-        "24",
-        "--prune-stale",
+        "scheduler",
+        "--control-mode",
+        "${WICAP_ASSIST_SCHEDULER_CONTROL_MODE:-observe}",
+        "--heartbeat-interval-seconds",
+        "10",
+        "--memory-maintenance-interval-seconds",
+        "900",
+        "--rollout-gates-interval-seconds",
+        "300",
       ]
     restart: unless-stopped
 

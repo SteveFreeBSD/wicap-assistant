@@ -11,10 +11,10 @@ ROLL_HISTORY="${3:-${REPORT_DIR}/rollout_gates_history.jsonl}"
 mkdir -p "${REPORT_DIR}"
 
 echo "[live-gate] contract-check --enforce"
-PYTHONPATH=src python -m wicap_assist.cli --db "${DB_PATH}" contract-check --enforce --json > "${REPORT_DIR}/contract_check_latest.json"
+PYTHONPATH=src python3 -m wicap_assist.cli --db "${DB_PATH}" contract-check --enforce --json > "${REPORT_DIR}/contract_check_latest.json"
 
 echo "[live-gate] rollout-gates --enforce"
-PYTHONPATH=src python -m wicap_assist.cli \
+PYTHONPATH=src python3 -m wicap_assist.cli \
   --db "${DB_PATH}" \
   rollout-gates \
   --history-file "${ROLL_HISTORY}" \
@@ -23,7 +23,7 @@ PYTHONPATH=src python -m wicap_assist.cli \
   --json > "${REPORT_DIR}/rollout_gates_latest.json"
 
 echo "[live-gate] memory-maintenance --prune-stale"
-PYTHONPATH=src python -m wicap_assist.cli \
+PYTHONPATH=src python3 -m wicap_assist.cli \
   --db "${DB_PATH}" \
   memory-maintenance \
   --prune-stale \
