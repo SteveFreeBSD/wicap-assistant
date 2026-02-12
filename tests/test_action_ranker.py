@@ -236,3 +236,49 @@ def test_rank_allowlisted_actions_shadow_gate_ignores_non_action_dilution(tmp_pa
         assert int(shadow_gate["samples"]) >= 200
     finally:
         conn.close()
+
+
+def test_rank_allowlisted_actions_shadow_gate_counts_threshold_recover_actions(tmp_path: Path) -> None:
+    conn = connect_db(tmp_path / "assistant.db")
+    try:
+        for idx in range(260):
+            ts = f"2026-02-11T03:{idx // 60:02d}:{idx % 60:02d}+00:00"
+            insert_decision_feature(
+                conn,
+                control_session_id=None,
+                soak_run_id=None,
+                episode_id=None,
+                ts=ts,
+                mode="autonomous",
+                policy_profile="autonomous-v1",
+                decision="service_health",
+                action=None,
+                status="down_detected",
+                feature_json={"shadow_ranker_top_action": "restart_service:wicap-ui"},
+            )
+            insert_decision_feature(
+                conn,
+                control_session_id=None,
+                soak_run_id=None,
+                episode_id=None,
+                ts=ts,
+                mode="autonomous",
+                policy_profile="autonomous-v1",
+                decision="threshold_recover",
+                action="restart_service:wicap-ui",
+                status="executed_ok",
+                feature_json={"shadow_ranker_top_action": "restart_service:wicap-ui"},
+            )
+        conn.commit()
+
+        ranked = rank_allowlisted_actions(
+            conn,
+            observation=_observation_with_down_redis(),
+            mode="autonomous",
+            policy_profile="autonomous-v1",
+            top_n=3,
+        )
+        shadow_gate = ranked["shadow_gate"]
+        assert int(shadow_gate["samples"]) >= 200
+    finally:
+        conn.close()

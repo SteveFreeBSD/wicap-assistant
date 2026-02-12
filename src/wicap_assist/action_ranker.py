@@ -138,7 +138,6 @@ def _shadow_quality_gate(conn: sqlite3.Connection) -> dict[str, Any]:
         SELECT decision, action, status, feature_json
         FROM decision_features
         WHERE feature_json LIKE '%shadow_ranker_top_action%'
-          AND decision IN ('threshold_check', 'anomaly_verify', 'health_probe')
           AND COALESCE(TRIM(action), '') != ''
         ORDER BY id DESC
         LIMIT ?
