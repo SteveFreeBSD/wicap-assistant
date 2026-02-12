@@ -13,15 +13,16 @@ class _DummyResult:
         self.stderr = stderr
 
 
-def test_status_check_missing_script_returns_missing_script(tmp_path: Path) -> None:
+def test_status_check_missing_script_uses_internal_fallback(tmp_path: Path) -> None:
     result = run_allowlisted_action(
         action="status_check",
         mode="assist",
         repo_root=tmp_path,
         runner=lambda *args, **kwargs: _DummyResult(0),  # type: ignore[no-untyped-def]
     )
-    assert result.status == "missing_script"
-    assert result.commands == []
+    assert result.status == "executed_ok"
+    assert result.commands == [["internal_http_probe", "http://127.0.0.1:8080/health"]]
+    assert "internal_http_probe" in result.detail
 
 
 def test_compose_up_observe_mode_is_skipped(tmp_path: Path) -> None:

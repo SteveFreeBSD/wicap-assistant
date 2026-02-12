@@ -589,7 +589,6 @@ class ControlPolicy:
                 and probe_interval > 0
                 and int(self._cycle) % probe_interval == 0
                 and not action_already_selected
-                and self._status_check_available
             ):
                 status, command, detail, policy_trace, failure_class = self._run_allowlisted("status_check")
                 events.append(

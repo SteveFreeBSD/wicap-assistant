@@ -320,6 +320,34 @@ def test_control_policy_emits_health_probe_on_stable_cycle(tmp_path: Path) -> No
     assert any("check_wicap_status.py" in " ".join(cmd) or "scripts.check_wicap_status" in " ".join(cmd) for cmd in calls)
 
 
+def test_control_policy_emits_health_probe_without_status_script(tmp_path: Path) -> None:
+    repo = tmp_path / "wicap"
+    repo.mkdir(parents=True)
+
+    calls: list[list[str]] = []
+
+    def ok_runner(cmd, cwd, capture_output, text, check, timeout):  # type: ignore[no-untyped-def]
+        calls.append(list(cmd))
+        return _DummyResult(0, stdout="ok\n")
+
+    policy = ControlPolicy(
+        mode="assist",
+        repo_root=repo,
+        runner=ok_runner,
+        check_threshold=2,
+        recover_threshold=3,
+        health_probe_interval_cycles=1,
+    )
+
+    observation = _observation(down=False)
+    events = policy.process_observation(observation)
+    probe = next((event for event in events if str(event.get("decision")) == "health_probe"), None)
+    assert probe is not None
+    assert str(probe.get("action")) == "status_check"
+    assert str(probe.get("status")) == "executed_ok"
+    assert calls == []
+
+
 def test_control_policy_ignores_scout_down_for_health_state(tmp_path: Path) -> None:
     repo = tmp_path / "wicap"
     script = repo / "check_wicap_status.py"

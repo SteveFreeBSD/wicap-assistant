@@ -9,6 +9,7 @@ import sys
 from typing import Callable
 
 from wicap_assist.control_planes import ControlPlanePolicy
+from wicap_assist.probes import probe_http_health
 from wicap_assist.util.redact import to_snippet
 
 Runner = Callable[..., subprocess.CompletedProcess[str]]
@@ -19,6 +20,8 @@ RESTART_SERVICE_ALIASES = {
     "scout": "wicap-scout",
     "redis": "wicap-redis",
 }
+_STATUS_FALLBACK_URL = "http://127.0.0.1:8080/health"
+_STATUS_FALLBACK_COMMAND = ["internal_http_probe", _STATUS_FALLBACK_URL]
 
 
 @dataclass(slots=True)
@@ -61,6 +64,20 @@ def _execute(
     return int(result.returncode), to_snippet(merged, max_len=200) if merged else ""
 
 
+def _internal_status_probe_detail(*, timeout_seconds: int) -> str:
+    probe = probe_http_health(
+        url=_STATUS_FALLBACK_URL,
+        timeout_seconds=max(0.5, min(5.0, float(timeout_seconds))),
+    )
+    ok = bool(probe.get("ok"))
+    status_code = probe.get("status_code")
+    error = str(probe.get("error") or "").strip()
+    return (
+        f"internal_http_probe ok={ok} status_code={status_code} "
+        f"error={error or 'none'}"
+    )
+
+
 def run_allowlisted_action(
     *,
     action: str,
@@ -97,14 +114,17 @@ def run_allowlisted_action(
             policy_trace=dict(plane_decision.policy_trace),
         )
 
+    internal_status_fallback = False
     if action_name == "status_check":
         script = _status_script_path(repo_root)
         if script is None:
-            return ActuatorResult(status="missing_script", commands=[], detail="status check script not found")
-        if script.parent.name == "scripts":
-            commands = [[sys.executable, "-m", "scripts.check_wicap_status", "--local-only", "--json"]]
+            internal_status_fallback = True
+            commands = [list(_STATUS_FALLBACK_COMMAND)]
         else:
-            commands = [[sys.executable, str(script), "--local-only", "--json"]]
+            if script.parent.name == "scripts":
+                commands = [[sys.executable, "-m", "scripts.check_wicap_status", "--local-only", "--json"]]
+            else:
+                commands = [[sys.executable, str(script), "--local-only", "--json"]]
     elif action_name == "compose_up":
         commands = [["docker", "compose", "up", "-d"]]
     elif action_name == "compose_up_core":
@@ -134,6 +154,14 @@ def run_allowlisted_action(
             status="skipped_observe_mode",
             commands=commands,
             detail="observe mode: action not executed",
+            policy_trace=dict(plane_decision.policy_trace),
+        )
+
+    if internal_status_fallback:
+        return ActuatorResult(
+            status="executed_ok",
+            commands=commands,
+            detail=_internal_status_probe_detail(timeout_seconds=timeout_seconds),
             policy_trace=dict(plane_decision.policy_trace),
         )
 
