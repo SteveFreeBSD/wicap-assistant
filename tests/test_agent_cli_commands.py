@@ -58,7 +58,17 @@ def test_agent_forecast_json_uses_forecast_table(tmp_path: Path, capsys) -> None
     finally:
         conn.close()
 
-    rc = cli_mod.main(["--db", str(db_path), "agent", "forecast", "--json"])
+    rc = cli_mod.main(
+        [
+            "--db",
+            str(db_path),
+            "agent",
+            "forecast",
+            "--lookback-hours",
+            "240",
+            "--json",
+        ]
+    )
     assert rc == 0
     payload = json.loads(capsys.readouterr().out.strip())
     assert int(payload["count"]) >= 1
