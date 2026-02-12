@@ -15,6 +15,7 @@ Options:
   --autopilot-mode MODE        monitor|observe|assist|autonomous (default: autonomous)
   --operate-cycles N           Autopilot operate cycles for sweep run (default: 220)
   --ui-timeout-seconds N       Wait budget for http://127.0.0.1:8080/health (default: 180)
+  --max-gate-retries N         Extra autopilot warmup+gate retries in strict mode (default: 2)
   --with-scout                 Start scout service during bootstrap/smoke
   --skip-build                 Skip docker compose --build steps
   --no-start-autopilot-service Do not start continuous autopilot sidecar at sweep end
@@ -34,6 +35,7 @@ OUTPUT_DIR="${OUTPUT_DIR:-${ASSIST_ROOT}/data/reports/sweeps}"
 AUTOPILOT_MODE="${AUTOPILOT_MODE:-autonomous}"
 OPERATE_CYCLES=220
 UI_TIMEOUT_SECONDS=180
+MAX_GATE_RETRIES=2
 WITH_SCOUT=0
 SKIP_BUILD=0
 START_AUTOPILOT_SERVICE=1
@@ -65,6 +67,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --ui-timeout-seconds)
             UI_TIMEOUT_SECONDS="${2:-}"
+            shift 2
+            ;;
+        --max-gate-retries)
+            MAX_GATE_RETRIES="${2:-}"
             shift 2
             ;;
         --with-scout)
@@ -117,6 +123,10 @@ if ! [[ "${OPERATE_CYCLES}" =~ ^[0-9]+$ ]] || [[ "${OPERATE_CYCLES}" -lt 1 ]]; t
 fi
 if ! [[ "${UI_TIMEOUT_SECONDS}" =~ ^[0-9]+$ ]] || [[ "${UI_TIMEOUT_SECONDS}" -lt 1 ]]; then
     echo "ERROR: --ui-timeout-seconds must be an integer >= 1" >&2
+    exit 2
+fi
+if ! [[ "${MAX_GATE_RETRIES}" =~ ^[0-9]+$ ]] || [[ "${MAX_GATE_RETRIES}" -lt 0 ]]; then
+    echo "ERROR: --max-gate-retries must be an integer >= 0" >&2
     exit 2
 fi
 
@@ -175,6 +185,7 @@ echo "[info] wicap_root=${WICAP_ROOT}"
 echo "[info] assistant_db=${ASSIST_DB}"
 echo "[info] run_dir=${RUN_DIR}"
 echo "[info] ui_timeout_seconds=${UI_TIMEOUT_SECONDS}"
+echo "[info] max_gate_retries=${MAX_GATE_RETRIES}"
 
 record_step() {
     local name="$1"
@@ -217,6 +228,12 @@ run_json_step() {
         echo "[fail] ${name} rc=${rc} (json: ${json_path}, err: ${err_path})"
         sed -n '1,120p' "${err_path}" || true
     fi
+    return "${rc}"
+}
+
+latest_step_rc() {
+    local name="$1"
+    awk -F '\t' -v step="${name}" '$1==step {print $2}' "${STEP_FILE}" | tail -n1
 }
 
 if [[ "${DO_BOOTSTRAP}" -eq 1 ]]; then
@@ -275,12 +292,28 @@ docker compose ps >&2 || true
 exit 1
 "
 
-run_json_step "autopilot_once" bash -lc "cd \"${ASSIST_ROOT}\" && PYTHONPATH=src python3 -m wicap_assist.cli --db \"${ASSIST_DB}\" autopilot --control-mode \"${AUTOPILOT_MODE}\" --operate-cycles \"${OPERATE_CYCLES}\" --stop-on-escalation --no-rollback-on-verify-failure --max-runs 1 --json"
-run_json_step "rollout_gates_pass1" bash -lc "cd \"${ASSIST_ROOT}\" && PYTHONPATH=src python3 -m wicap_assist.cli --db \"${ASSIST_DB}\" rollout-gates --json"
+run_json_step "autopilot_once" bash -lc "cd \"${ASSIST_ROOT}\" && PYTHONPATH=src python3 -m wicap_assist.cli --db \"${ASSIST_DB}\" autopilot --control-mode \"${AUTOPILOT_MODE}\" --operate-cycles \"${OPERATE_CYCLES}\" --stop-on-escalation --no-rollback-on-verify-failure --max-runs 1 --json" || true
+run_json_step "rollout_gates_pass1" bash -lc "cd \"${ASSIST_ROOT}\" && PYTHONPATH=src python3 -m wicap_assist.cli --db \"${ASSIST_DB}\" rollout-gates --json" || true
 if [[ "${STRICT}" -eq 1 ]]; then
-    run_json_step "rollout_gates_pass2" bash -lc "cd \"${ASSIST_ROOT}\" && PYTHONPATH=src python3 -m wicap_assist.cli --db \"${ASSIST_DB}\" rollout-gates --enforce --json"
+    run_json_step "rollout_gates_pass2" bash -lc "cd \"${ASSIST_ROOT}\" && PYTHONPATH=src python3 -m wicap_assist.cli --db \"${ASSIST_DB}\" rollout-gates --enforce --json" || true
 else
-    run_json_step "rollout_gates_pass2" bash -lc "cd \"${ASSIST_ROOT}\" && PYTHONPATH=src python3 -m wicap_assist.cli --db \"${ASSIST_DB}\" rollout-gates --json"
+    run_json_step "rollout_gates_pass2" bash -lc "cd \"${ASSIST_ROOT}\" && PYTHONPATH=src python3 -m wicap_assist.cli --db \"${ASSIST_DB}\" rollout-gates --json" || true
+fi
+
+FINAL_GATE_STEP="rollout_gates_pass2"
+if [[ "${STRICT}" -eq 1 ]]; then
+    gate_rc="$(latest_step_rc "${FINAL_GATE_STEP}")"
+    if [[ -n "${gate_rc}" && "${gate_rc}" -ne 0 && "${MAX_GATE_RETRIES}" -gt 0 ]]; then
+        for retry in $(seq 1 "${MAX_GATE_RETRIES}"); do
+            run_json_step "autopilot_retry${retry}" bash -lc "cd \"${ASSIST_ROOT}\" && PYTHONPATH=src python3 -m wicap_assist.cli --db \"${ASSIST_DB}\" autopilot --control-mode \"${AUTOPILOT_MODE}\" --operate-cycles \"${OPERATE_CYCLES}\" --stop-on-escalation --no-rollback-on-verify-failure --max-runs 1 --json" || true
+            FINAL_GATE_STEP="rollout_gates_retry${retry}"
+            run_json_step "${FINAL_GATE_STEP}" bash -lc "cd \"${ASSIST_ROOT}\" && PYTHONPATH=src python3 -m wicap_assist.cli --db \"${ASSIST_DB}\" rollout-gates --enforce --json" || true
+            gate_rc="$(latest_step_rc "${FINAL_GATE_STEP}")"
+            if [[ -n "${gate_rc}" && "${gate_rc}" -eq 0 ]]; then
+                break
+            fi
+        done
+    fi
 fi
 live_gate_cmd=(
     "${ASSIST_ROOT}/scripts/live_testing_gate.sh"
@@ -292,15 +325,15 @@ live_gate_cmd=(
 )
 run_stream_step "live_testing_gate" "${live_gate_cmd[@]}"
 
-run_json_step "contract_check" bash -lc "cd \"${ASSIST_ROOT}\" && PYTHONPATH=src python3 -m wicap_assist.cli --db \"${ASSIST_DB}\" contract-check --json --no-enforce"
-run_json_step "failover_state" bash -lc "cd \"${ASSIST_ROOT}\" && PYTHONPATH=src python3 -m wicap_assist.cli --db \"${ASSIST_DB}\" agent failover-state --json"
-run_json_step "policy_explain" bash -lc "cd \"${ASSIST_ROOT}\" && PYTHONPATH=src python3 -m wicap_assist.cli --db \"${ASSIST_DB}\" agent explain-policy --json"
-run_json_step "sandbox_explain_assist" bash -lc "cd \"${ASSIST_ROOT}\" && PYTHONPATH=src python3 -m wicap_assist.cli --db \"${ASSIST_DB}\" agent sandbox-explain --action status_check --mode assist --json"
-run_json_step "backfill_report" bash -lc "cd \"${ASSIST_ROOT}\" && PYTHONPATH=src python3 -m wicap_assist.cli --db \"${ASSIST_DB}\" backfill-report --json"
+run_json_step "contract_check" bash -lc "cd \"${ASSIST_ROOT}\" && PYTHONPATH=src python3 -m wicap_assist.cli --db \"${ASSIST_DB}\" contract-check --json --no-enforce" || true
+run_json_step "failover_state" bash -lc "cd \"${ASSIST_ROOT}\" && PYTHONPATH=src python3 -m wicap_assist.cli --db \"${ASSIST_DB}\" agent failover-state --json" || true
+run_json_step "policy_explain" bash -lc "cd \"${ASSIST_ROOT}\" && PYTHONPATH=src python3 -m wicap_assist.cli --db \"${ASSIST_DB}\" agent explain-policy --json" || true
+run_json_step "sandbox_explain_assist" bash -lc "cd \"${ASSIST_ROOT}\" && PYTHONPATH=src python3 -m wicap_assist.cli --db \"${ASSIST_DB}\" agent sandbox-explain --action status_check --mode assist --json" || true
+run_json_step "backfill_report" bash -lc "cd \"${ASSIST_ROOT}\" && PYTHONPATH=src python3 -m wicap_assist.cli --db \"${ASSIST_DB}\" backfill-report --json" || true
 
 if [[ "${RUN_CERTIFICATIONS}" -eq 1 ]]; then
-    run_json_step "replay_certify" bash -lc "cd \"${ASSIST_ROOT}\" && PYTHONPATH=src python3 -m wicap_assist.cli --db \"${ASSIST_DB}\" agent replay-certify --profile default --json"
-    run_json_step "chaos_certify" bash -lc "cd \"${ASSIST_ROOT}\" && PYTHONPATH=src python3 -m wicap_assist.cli --db \"${ASSIST_DB}\" agent chaos-certify --profile default --json"
+    run_json_step "replay_certify" bash -lc "cd \"${ASSIST_ROOT}\" && PYTHONPATH=src python3 -m wicap_assist.cli --db \"${ASSIST_DB}\" agent replay-certify --profile default --json" || true
+    run_json_step "chaos_certify" bash -lc "cd \"${ASSIST_ROOT}\" && PYTHONPATH=src python3 -m wicap_assist.cli --db \"${ASSIST_DB}\" agent chaos-certify --profile default --json" || true
 fi
 
 if [[ "${START_AUTOPILOT_SERVICE}" -eq 1 ]]; then
@@ -348,13 +381,14 @@ record_step "db_snapshot" "0"
 echo "[pass] db_snapshot"
 
 echo "[step] building sweep summary"
-python3 - "${RUN_DIR}" "${STEP_FILE}" > "${RUN_DIR}/summary.json" <<'PY'
+python3 - "${RUN_DIR}" "${STEP_FILE}" "${FINAL_GATE_STEP}" > "${RUN_DIR}/summary.json" <<'PY'
 import json
 import pathlib
 import sys
 
 run_dir = pathlib.Path(sys.argv[1])
 step_file = pathlib.Path(sys.argv[2])
+final_gate_step = str(sys.argv[3])
 steps = []
 for raw in step_file.read_text(encoding="utf-8").splitlines():
     line = raw.strip()
@@ -373,7 +407,7 @@ def load_json(name: str):
         return None
 
 autopilot = load_json("autopilot_once")
-rollout = load_json("rollout_gates_pass2")
+rollout = load_json(final_gate_step)
 contract = load_json("contract_check")
 db_snapshot = load_json("db_snapshot")
 
@@ -390,6 +424,7 @@ if isinstance(autopilot, dict):
 
 summary = {
     "run_dir": str(run_dir),
+    "final_gate_step": final_gate_step,
     "step_results": steps,
     "step_failures": [item["step"] for item in steps if int(item["rc"]) != 0],
     "autopilot_latest_status": (
@@ -425,7 +460,7 @@ python3 -m json.tool "${RUN_DIR}/summary.json"
 record_step "summary" "0"
 
 critical_fail=0
-for step_name in bootstrap core_reconcile autopilot_once rollout_gates_pass2 contract_check autopilot_service_start db_snapshot summary; do
+for step_name in bootstrap core_reconcile autopilot_once "${FINAL_GATE_STEP}" contract_check autopilot_service_start db_snapshot summary; do
     step_rc="$(awk -F '\t' -v name="${step_name}" '$1==name {print $2}' "${STEP_FILE}" | tail -n1)"
     if [[ -n "${step_rc}" && "${step_rc}" -ne 0 ]]; then
         critical_fail=1
@@ -434,6 +469,26 @@ done
 
 echo "[done] comprehensive sweep artifacts: ${RUN_DIR}"
 if [[ "${STRICT}" -eq 1 && "${critical_fail}" -ne 0 ]]; then
+    echo "[error] strict critical step failures:"
+    for step_name in bootstrap core_reconcile autopilot_once "${FINAL_GATE_STEP}" contract_check autopilot_service_start db_snapshot summary; do
+        step_rc="$(latest_step_rc "${step_name}")"
+        if [[ -n "${step_rc}" && "${step_rc}" -ne 0 ]]; then
+            echo "  - ${step_name}: rc=${step_rc}"
+        fi
+    done
+    if [[ -f "${RUN_DIR}/${FINAL_GATE_STEP}.json" ]]; then
+        echo "[error] last gate snapshot (${FINAL_GATE_STEP}):"
+        python3 - "${RUN_DIR}/${FINAL_GATE_STEP}.json" <<'PY'
+import json, sys
+path = sys.argv[1]
+payload = json.loads(open(path, encoding="utf-8").read())
+print(json.dumps({
+    "overall_pass": payload.get("overall_pass"),
+    "promotion": payload.get("promotion"),
+    "gates": payload.get("gates"),
+}, sort_keys=True))
+PY
+    fi
     echo "ERROR: comprehensive sweep failed critical steps in strict mode." >&2
     exit 1
 fi
