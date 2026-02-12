@@ -18,6 +18,7 @@ from wicap_assist.git_context import (
     load_codex_git_evidence_fallback,
 )
 from wicap_assist.harness_match import find_relevant_harness_scripts
+from wicap_assist.known_issues import match_known_issue
 from wicap_assist.evidence_query import signature_tokens, where_like
 from wicap_assist.memory_semantic import retrieve_episode_memories
 from wicap_assist.recommend_confidence import (
@@ -330,6 +331,48 @@ def _memory_confidence(memory_episodes: list[dict[str, Any]]) -> float:
     return round(min(0.45, base + bonus), 3)
 
 
+def _apply_known_issue_hint(
+    payload: dict[str, Any],
+    *,
+    signature: str,
+    category: str,
+    example: str = "",
+) -> bool:
+    hint = match_known_issue(signature=signature, category=category, example=example)
+    if hint is None:
+        return False
+
+    recommended_action = str(hint.get("recommended_action", "")).strip()
+    if recommended_action:
+        payload["recommended_action"] = recommended_action
+    payload["confidence"] = round(
+        max(float(payload.get("confidence", 0.0)), float(hint.get("confidence", 0.0))),
+        3,
+    )
+    verify_steps = [
+        normalize_verification_step(str(step))
+        for step in list(hint.get("verification_steps", []))
+        if normalize_verification_step(str(step))
+    ]
+    if verify_steps:
+        payload["verification_priority"] = _dedupe_keep_order(
+            verify_steps + [str(step) for step in payload.get("verification_priority", []) if str(step).strip()]
+        )[:5]
+        payload["verification_steps"] = list(payload["verification_priority"])
+        payload["verification_step_safety"] = [
+            {
+                "step": step,
+                "safety": classify_verification_step(step),
+            }
+            for step in payload["verification_steps"]
+        ]
+    risk_notes = str(hint.get("risk_notes", "")).strip()
+    if risk_notes:
+        existing = str(payload.get("risk_notes", "")).strip()
+        payload["risk_notes"] = f"{existing}; {risk_notes}".strip("; ") if existing else risk_notes
+    return True
+
+
 def build_recommendation(conn: sqlite3.Connection, target: str) -> dict[str, Any]:
     """Build deterministic recommendation JSON payload."""
     memory_episodes = retrieve_episode_memories(conn, target, limit=3)
@@ -338,6 +381,7 @@ def build_recommendation(conn: sqlite3.Connection, target: str) -> dict[str, Any
     context = _pick_context(conn, target)
     if context is None:
         payload = _empty_recommendation_payload(target)
+        _apply_known_issue_hint(payload, signature=target, category="", example=target)
         if memory_action:
             payload["recommended_action"] = memory_action
             payload["confidence"] = _memory_confidence(memory_episodes)
@@ -429,6 +473,12 @@ def build_recommendation(conn: sqlite3.Connection, target: str) -> dict[str, Any
     sufficient = bool(sufficient or memory_action)
     if not sufficient:
         payload = _empty_recommendation_payload(target, git_context=git_context)
+        _apply_known_issue_hint(
+            payload,
+            signature=context.signature,
+            category=context.category,
+            example=context.signature,
+        )
         payload["memory_episodes"] = memory_episodes
         payload["memory_episode_count"] = int(len(memory_episodes))
         if memory_action:

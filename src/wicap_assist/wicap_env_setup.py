@@ -1534,6 +1534,7 @@ def run_wicap_env_setup(
         print_fn(f"- Compose override written: {compose_override_path}")
 
     next_commands = [
+        f"wicap-assist validate-wicap-env --repo-root {resolved_repo_root}",
         f"cd {resolved_repo_root}",
         "docker compose up -d --build redis processor ui",
         "docker compose ps",

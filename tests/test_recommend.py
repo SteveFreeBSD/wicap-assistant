@@ -143,6 +143,18 @@ def test_unknown_signature_returns_zero_confidence(tmp_path: Path) -> None:
     conn.close()
 
 
+def test_known_issue_signature_returns_actionable_recommendation(tmp_path: Path) -> None:
+    conn = connect_db(tmp_path / "assistant.db")
+    payload = build_recommendation(conn, 'UI push failed: 403 {"detail":"Client not allowed"}')
+
+    assert payload["recommended_action"] != "insufficient historical evidence"
+    assert "WICAP_UI_URL" in str(payload["recommended_action"])
+    assert payload["verification_steps"]
+    assert float(payload["confidence"]) > 0.0
+
+    conn.close()
+
+
 def test_network_anomaly_signature_is_considered_for_recommendation(tmp_path: Path) -> None:
     conn = connect_db(tmp_path / "assistant.db")
     cur = conn.cursor()

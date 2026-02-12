@@ -160,6 +160,73 @@ def test_cli_live_once_exits_cleanly(tmp_path: Path, monkeypatch) -> None:
     assert captured["control_mode"] == "observe"
 
 
+def test_live_once_applies_known_issue_hint_when_recommendation_is_empty(tmp_path: Path, monkeypatch, capsys) -> None:
+    db_path = tmp_path / "assistant.db"
+    conn = connect_db(db_path)
+
+    error_line = 'Error: UI push failed: 403 {"detail":"Client not allowed"}'
+
+    def fake_probe_docker():  # type: ignore[no-untyped-def]
+        return {
+            "docker_ps_ok": True,
+            "services": {
+                "wicap-ui": {"state": "up", "status": "Up 10 minutes", "container": "a"},
+                "wicap-processor": {"state": "up", "status": "Up 10 minutes", "container": "b"},
+                "wicap-scout": {"state": "up", "status": "Up 10 minutes", "container": "c"},
+                "wicap-redis": {"state": "up", "status": "Up 10 minutes", "container": "d"},
+            },
+            "logs": {
+                "wicap-ui": [],
+                "wicap-processor": [error_line],
+                "wicap-scout": [],
+                "wicap-redis": [],
+            },
+        }
+
+    def fake_probe_network():  # type: ignore[no-untyped-def]
+        return {"ss_ok": True, "listening_ports": [8080], "expected_ports": {"8080": True, "6380": True}}
+
+    def fake_probe_http_health():  # type: ignore[no-untyped-def]
+        return {"url": "http://127.0.0.1:8080/health", "ok": True, "status_code": 200, "error": None}
+
+    def fake_recommendation(_conn, target):  # type: ignore[no-untyped-def]
+        return {
+            "input": target,
+            "recommended_action": "insufficient historical evidence",
+            "confidence": 0.0,
+            "based_on_sessions": [],
+            "related_playbooks": [],
+            "harness_tests": [],
+            "git_context": {},
+            "confidence_breakdown": {},
+            "verification_priority": [],
+            "verification_step_safety": [],
+            "risk_notes": "",
+            "verification_steps": [],
+            "memory_episodes": [],
+            "memory_episode_count": 0,
+        }
+
+    monkeypatch.setattr("wicap_assist.live.probe_docker", fake_probe_docker)
+    monkeypatch.setattr("wicap_assist.live.probe_network", fake_probe_network)
+    monkeypatch.setattr("wicap_assist.live.probe_http_health", fake_probe_http_health)
+    monkeypatch.setattr("wicap_assist.live.build_recommendation", fake_recommendation)
+
+    rc = run_live_monitor(conn, interval=0.1, once=True, playbooks_dir=tmp_path / "docs" / "playbooks")
+    assert rc == 0
+    _ = capsys.readouterr().out
+
+    row = conn.execute("SELECT * FROM live_observations ORDER BY id DESC LIMIT 1").fetchone()
+    assert row is not None
+    recommended = json.loads(row["recommended_json"])
+    assert recommended
+    action = str(recommended[0]["recommendation"]["recommended_action"])
+    assert "WICAP_UI_URL" in action
+    assert recommended[0]["safe_verify_steps"]
+
+    conn.close()
+
+
 def test_cli_live_accepts_autonomous_mode(tmp_path: Path, monkeypatch) -> None:
     captured: dict[str, object] = {}
 

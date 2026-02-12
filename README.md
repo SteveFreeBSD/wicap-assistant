@@ -13,6 +13,7 @@ It is network-aware and memory-backed, but policy-bounded: it does not execute a
 - Runs live control loops (`observe`, `assist`, `autonomous`) with audit trails.
 - Persists memory artifacts for decisions, outcomes, and working context across sessions.
 - Emits OTLP-aligned telemetry envelopes with redaction controls.
+- Includes deterministic known-issue routing for common rollout failures (allowlist 403s, UI startup races, capture permission errors, compose misuse).
 
 ## Live Control Modes
 - `observe` (alias: `monitor`)

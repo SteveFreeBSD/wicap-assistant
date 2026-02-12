@@ -32,6 +32,7 @@ from wicap_assist.guardian import (
     load_playbook_entries,
     scan_guardian_once,
 )
+from wicap_assist.known_issues import match_known_issue
 from wicap_assist.playbooks import default_playbooks_dir
 from wicap_assist.probes import probe_docker, probe_http_health, probe_network
 from wicap_assist.recommend import build_recommendation
@@ -283,6 +284,11 @@ def _build_live_guidance(
             action = str(recommend_payload.get("recommended_action", "")).strip()
             if action and action != "insufficient historical evidence":
                 add(action)
+        known_issue = item.get("known_issue")
+        if isinstance(known_issue, dict):
+            known_action = str(known_issue.get("recommended_action", "")).strip()
+            if known_action:
+                add(known_action)
 
     if not lines and alert:
         add("Alert detected; check service status and review recent container logs.")
@@ -355,12 +361,41 @@ def collect_live_cycle(
         if not signature:
             continue
         recommend_payload = build_recommendation(conn, signature)
+        known_issue = match_known_issue(
+            signature=signature,
+            category=str(item.get("category", "")),
+            example=str(item.get("example", "")),
+        )
+        if (
+            known_issue is not None
+            and str(recommend_payload.get("recommended_action", "")).strip() == "insufficient historical evidence"
+        ):
+            recommend_payload = dict(recommend_payload)
+            recommended_action = str(known_issue.get("recommended_action", "")).strip()
+            if recommended_action:
+                recommend_payload["recommended_action"] = recommended_action
+            recommend_payload["confidence"] = round(
+                max(float(recommend_payload.get("confidence", 0.0)), float(known_issue.get("confidence", 0.0))),
+                3,
+            )
+            verify_steps = [str(step).strip() for step in list(known_issue.get("verification_steps", [])) if str(step).strip()]
+            if verify_steps:
+                recommend_payload["verification_priority"] = verify_steps[:5]
+                recommend_payload["verification_steps"] = verify_steps[:5]
+                recommend_payload["verification_step_safety"] = [
+                    {"step": step, "safety": "safe"}
+                    for step in verify_steps[:5]
+                ]
+            risk_notes = str(known_issue.get("risk_notes", "")).strip()
+            if risk_notes:
+                recommend_payload["risk_notes"] = risk_notes
         recommendations.append(
             {
                 "signature": signature,
                 "category": str(item.get("category", "")),
                 "recommendation": recommend_payload,
                 "safe_verify_steps": _safe_verify_steps(recommend_payload),
+                "known_issue": known_issue,
             }
         )
 
