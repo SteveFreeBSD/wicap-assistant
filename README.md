@@ -21,6 +21,7 @@ It is network-aware and memory-backed, but policy-bounded: it does not execute a
   - Read-only; reports health, signatures, and recommended next actions.
 - `assist`
   - Executes allowlisted recovery actions under policy controls.
+  - Runs deterministic `health_probe` status checks on stable cycles to keep shadow quality evidence fresh.
 - `autonomous`
   - Enables autonomous policy profile with rollback sequence + kill-switch checks.
 
@@ -132,6 +133,7 @@ Autopilot supervisor (hands-off state machine):
 ```bash
 wicap-assist autopilot --control-mode assist --operate-cycles 6 --stop-on-escalation
 ```
+`autopilot` now treats verify failures that are purely `insufficient_data` as `hold` (self-warmup state) instead of hard-fail when rollback is disabled.
 If you require capture (`scout`) to be running as part of autopilot preflight/contract gating:
 ```bash
 wicap-assist autopilot --control-mode assist --require-scout
@@ -187,6 +189,7 @@ Notes:
 - `wicap-assist-control` and interactive `wicap-assist` mount `/var/run/docker.sock` for allowlisted control actions.
 - `wicap-assist-scheduler` runs lease-guarded heartbeat + cron jobs and appends rollout gate snapshots.
 - `wicap-assist-autopilot` runs the full supervisor state machine and continuously emits autopilot run reports.
+- `wicap-assist-autopilot` defaults to `autonomous` mode (`WICAP_ASSIST_AUTOPILOT_MODE` can override).
 
 ## Memory and Learning Surfaces
 - Episodic memory: control episodes/events/outcomes persisted per decision path.
@@ -274,7 +277,7 @@ Data is stored in `./data/assistant.db`.
 - `wicap-assist confidence-audit [--limit N] [--json]`
 - `wicap-assist memory-maintenance [--lookback-days N] [--stale-days N] [--max-decision-rows N] [--max-session-rows N] [--max-recent-transitions N] [--prune-stale] [--output <file>] [--json]`
 - `wicap-assist scheduler [--owner <id>] [--lock-dir <dir>] [--state-path <file>] [--control-mode monitor|observe|assist|autonomous] [--heartbeat-interval-seconds N] [--heartbeat-lease-seconds N] [--memory-maintenance-interval-seconds N] [--rollout-gates-interval-seconds N] [--rollout-history-file <file>] [--memory-report-output <file>] [--no-memory-prune-stale] [--once] [--max-iterations N] [--stop-on-escalation] [--json]`
-- `wicap-assist autopilot [--control-mode monitor|observe|assist|autonomous] [--repo-root <path>] [--contract-path <file>] [--no-require-runtime-contract] [--no-startup] [--startup-actions <csv>] [--operate-cycles N] [--operate-interval-seconds N] [--stop-on-escalation] [--verify-replay] [--verify-chaos] [--profile <name>] [--gate-history-file <file>] [--required-consecutive-passes N] [--no-rollback-on-verify-failure] [--rollback-actions <csv>] [--report-path <file>] [--max-runs N] [--pause-seconds-between-runs N] [--json]`
+- `wicap-assist autopilot [--control-mode monitor|observe|assist|autonomous] [--repo-root <path>] [--contract-path <file>] [--no-require-runtime-contract] [--require-scout] [--no-startup] [--startup-actions <csv>] [--operate-cycles N] [--operate-interval-seconds N] [--stop-on-escalation] [--verify-replay] [--verify-chaos] [--profile <name>] [--gate-history-file <file>] [--required-consecutive-passes N] [--no-rollback-on-verify-failure] [--rollback-actions <csv>] [--report-path <file>] [--max-runs N] [--pause-seconds-between-runs N] [--json]`
 - `wicap-assist rollout-gates [--lookback-days N] [--min-shadow-samples N] [--min-shadow-agreement-rate F] [--min-shadow-success-rate F] [--min-reward-avg F] [--max-autonomous-escalation-rate F] [--min-autonomous-runs N] [--max-rollback-failures N] [--min-proactive-samples N] [--min-proactive-success-rate F] [--max-proactive-relapse-rate F] [--history-file <file>] [--required-consecutive-passes N] [--enforce] [--json]`
 - `wicap-assist soak-run [--duration-minutes N] [--playwright-interval-minutes N] [--baseline-path <file>] [--baseline-update|--no-baseline-update] [--observe-interval-seconds N] [--control-mode monitor|observe|assist|autonomous] [--control-check-threshold N] [--control-recover-threshold N] [--control-max-recover-attempts N] [--control-action-cooldown-cycles N] [--require-runtime-contract|--no-require-runtime-contract] [--runtime-contract-path <file>] [--stop-on-escalation|--no-stop-on-escalation] [--dry-run]`
 - `wicap-assist live [--interval N] [--once] [--control-mode monitor|observe|assist|autonomous] [--control-check-threshold N] [--control-recover-threshold N] [--control-max-recover-attempts N] [--control-action-cooldown-cycles N] [--stop-on-escalation]`

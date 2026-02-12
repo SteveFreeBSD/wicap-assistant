@@ -19,6 +19,14 @@ _AUTONOMOUS_KILL_SWITCH_FILE = ".wicap_assist_autonomous.kill"
 _KILL_SWITCH_TRUE_VALUES = {"1", "true", "yes", "on"}
 
 
+def _status_check_available(repo_root: Path) -> bool:
+    resolved = repo_root.resolve()
+    return bool(
+        (resolved / "scripts" / "check_wicap_status.py").exists()
+        or (resolved / "check_wicap_status.py").exists()
+    )
+
+
 def _default_policy_profile(
     *,
     mode: str,
@@ -26,6 +34,7 @@ def _default_policy_profile(
     recover_threshold: int | None,
     max_recover_attempts: int | None,
     action_cooldown_cycles: int | None,
+    health_probe_interval_cycles: int | None,
     repo_root: Path,
     kill_switch_env_var: str | None,
     kill_switch_file: Path | None,
@@ -39,6 +48,7 @@ def _default_policy_profile(
         default_recover = 3
         default_max_recover = 3
         default_cooldown = 1
+        default_probe_interval = 1
         default_rollbacks = ("shutdown", "compose_up_core")
         return {
             "name": "autonomous-v1",
@@ -54,6 +64,14 @@ def _default_policy_profile(
             "action_cooldown_cycles": max(
                 0,
                 int(action_cooldown_cycles if action_cooldown_cycles is not None else default_cooldown),
+            ),
+            "health_probe_interval_cycles": max(
+                0,
+                int(
+                    health_probe_interval_cycles
+                    if health_probe_interval_cycles is not None
+                    else default_probe_interval
+                ),
             ),
             "kill_switch_env_var": str(kill_switch_env_var or "WICAP_ASSIST_AUTONOMOUS_KILL_SWITCH").strip(),
             "kill_switch_file": (
@@ -78,6 +96,7 @@ def _default_policy_profile(
     default_recover = 5
     default_max_recover = 2
     default_cooldown = 1
+    default_probe_interval = 1
     return {
         "name": "supervised-v1",
         "check_threshold": max(1, int(check_threshold if check_threshold is not None else default_check)),
@@ -92,6 +111,14 @@ def _default_policy_profile(
         "action_cooldown_cycles": max(
             0,
             int(action_cooldown_cycles if action_cooldown_cycles is not None else default_cooldown),
+        ),
+        "health_probe_interval_cycles": max(
+            0,
+            int(
+                health_probe_interval_cycles
+                if health_probe_interval_cycles is not None
+                else default_probe_interval
+            ),
         ),
         "kill_switch_env_var": None,
         "kill_switch_file": None,
@@ -153,6 +180,7 @@ class ControlPolicy:
     recover_threshold: int | None
     max_recover_attempts: int | None = None
     action_cooldown_cycles: int | None = None
+    health_probe_interval_cycles: int | None = None
     timeout_seconds: int = 120
     service_ladders: dict[str, dict[str, int]] | None = None
     kill_switch_env_var: str | None = None
@@ -164,6 +192,7 @@ class ControlPolicy:
     _service_state: dict[str, dict[str, int]] = field(default_factory=dict, init=False)
     _anomaly_state: dict[str, int] = field(default_factory=dict, init=False)
     _cycle: int = field(default=0, init=False)
+    _status_check_available: bool = field(default=False, init=False)
 
     def __post_init__(self) -> None:
         self.mode = str(self.mode).strip().lower()
@@ -178,6 +207,7 @@ class ControlPolicy:
             recover_threshold=self.recover_threshold,
             max_recover_attempts=self.max_recover_attempts,
             action_cooldown_cycles=self.action_cooldown_cycles,
+            health_probe_interval_cycles=self.health_probe_interval_cycles,
             repo_root=self.repo_root,
             kill_switch_env_var=self.kill_switch_env_var,
             kill_switch_file=self.kill_switch_file,
@@ -190,6 +220,7 @@ class ControlPolicy:
         self.recover_threshold = int(profile["recover_threshold"])
         self.max_recover_attempts = int(profile["max_recover_attempts"])
         self.action_cooldown_cycles = int(profile["action_cooldown_cycles"])
+        self.health_probe_interval_cycles = int(profile["health_probe_interval_cycles"])
         self.kill_switch_env_var = (
             str(profile["kill_switch_env_var"])
             if profile.get("kill_switch_env_var") is not None
@@ -203,6 +234,7 @@ class ControlPolicy:
         self.rollback_enabled = bool(profile["rollback_enabled"])
         self.rollback_actions = tuple(str(item) for item in profile["rollback_actions"])
         self.rollback_max_attempts = int(profile["rollback_max_attempts"])
+        self._status_check_available = _status_check_available(self.repo_root)
 
         normalized: dict[str, dict[str, int]] = {}
         source = self.service_ladders or _default_service_ladders(
@@ -527,9 +559,44 @@ class ControlPolicy:
                         ),
                     },
                 }
-            )
+                )
 
         if not down_services:
+            probe_interval = max(0, int(self.health_probe_interval_cycles or 0))
+            action_already_selected = any(
+                isinstance(event, dict) and bool(event.get("action"))
+                for event in events
+            )
+            if (
+                self.mode in {"assist", "autonomous"}
+                and probe_interval > 0
+                and int(self._cycle) % probe_interval == 0
+                and not action_already_selected
+                and self._status_check_available
+            ):
+                status, command, detail, policy_trace, failure_class = self._run_allowlisted("status_check")
+                events.append(
+                    {
+                        "ts": ts,
+                        "decision": "health_probe",
+                        "action": "status_check",
+                        "status": status,
+                        "detail_json": {
+                            "cycle": int(self._cycle),
+                            "probe_interval_cycles": int(probe_interval),
+                            "command": command,
+                            "detail": detail,
+                            "policy_trace": policy_trace,
+                            "failure_class": failure_class,
+                            "handoff": orchestrate_role_handoff(
+                                planner_intent="health_probe",
+                                action="status_check",
+                                verifier_step="status_check",
+                                ts=ts,
+                            ),
+                        },
+                    }
+                )
             return events
 
         kill_switch_active, kill_switch_detail = self._kill_switch_state()

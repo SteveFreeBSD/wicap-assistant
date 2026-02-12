@@ -120,3 +120,41 @@ def test_rank_allowlisted_actions_reports_shadow_gate_metrics(
         assert bool(shadow_gate["passes"]) is True
     finally:
         conn.close()
+
+
+def test_rank_allowlisted_actions_counts_health_probe_for_shadow_gate(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    conn = connect_db(tmp_path / "assistant.db")
+    try:
+        monkeypatch.setenv("WICAP_ASSIST_SHADOW_GATE_MIN_SAMPLES", "1")
+        monkeypatch.setenv("WICAP_ASSIST_SHADOW_GATE_MIN_AGREEMENT", "0.5")
+        monkeypatch.setenv("WICAP_ASSIST_SHADOW_GATE_MIN_SUCCESS", "0.5")
+
+        insert_decision_feature(
+            conn,
+            control_session_id=None,
+            soak_run_id=None,
+            episode_id=None,
+            ts="2026-02-11T00:00:00+00:00",
+            mode="assist",
+            policy_profile="supervised-v1",
+            decision="health_probe",
+            action="status_check",
+            status="executed_ok",
+            feature_json={"shadow_ranker_top_action": "status_check"},
+        )
+        conn.commit()
+
+        ranked = rank_allowlisted_actions(
+            conn,
+            observation=_observation_with_down_redis(),
+            mode="assist",
+            policy_profile="supervised-v1",
+            top_n=3,
+        )
+        shadow_gate = ranked["shadow_gate"]
+        assert int(shadow_gate["samples"]) >= 1
+    finally:
+        conn.close()

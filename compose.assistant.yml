@@ -88,7 +88,7 @@ services:
       [
         "autopilot",
         "--control-mode",
-        "${WICAP_ASSIST_AUTOPILOT_MODE:-assist}",
+        "${WICAP_ASSIST_AUTOPILOT_MODE:-autonomous}",
         "--operate-cycles",
         "6",
         "--operate-interval-seconds",

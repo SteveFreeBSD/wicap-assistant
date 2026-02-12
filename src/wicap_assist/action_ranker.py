@@ -160,7 +160,7 @@ def _shadow_quality_gate(conn: sqlite3.Connection) -> dict[str, Any]:
         if not isinstance(feature, dict):
             continue
         decision = str(feature.get("decision") or row["decision"] or "").strip().lower()
-        if decision not in {"threshold_check", "anomaly_verify"}:
+        if decision not in {"threshold_check", "anomaly_verify", "health_probe"}:
             continue
         shadow_action = str(feature.get("shadow_ranker_top_action") or "").strip()
         if not shadow_action:

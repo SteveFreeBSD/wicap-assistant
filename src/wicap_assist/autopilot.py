@@ -119,6 +119,43 @@ def _runtime_contract_ok(
     }
 
 
+def _verify_failed_for_insufficient_data(verify_detail: dict[str, Any]) -> bool:
+    if not isinstance(verify_detail, dict):
+        return False
+    rollout = verify_detail.get("rollout_gates")
+    if not isinstance(rollout, dict):
+        return False
+    gates = rollout.get("gates")
+    if not isinstance(gates, dict) or not gates:
+        return False
+
+    failing_seen = False
+    for payload in gates.values():
+        if not isinstance(payload, dict):
+            continue
+        if bool(payload.get("pass", False)):
+            continue
+        failing_seen = True
+        status = str(payload.get("status", "")).strip().lower()
+        if status != "insufficient_data":
+            return False
+
+    if not failing_seen:
+        return False
+
+    replay_enabled = bool(verify_detail.get("verify_replay"))
+    replay_payload = verify_detail.get("replay")
+    if replay_enabled and isinstance(replay_payload, dict) and not bool(replay_payload.get("pass", False)):
+        return False
+
+    chaos_enabled = bool(verify_detail.get("verify_chaos"))
+    chaos_payload = verify_detail.get("chaos")
+    if chaos_enabled and isinstance(chaos_payload, dict) and not bool(chaos_payload.get("pass", False)):
+        return False
+
+    return True
+
+
 def _write_json(path: Path, payload: dict[str, Any]) -> Path:
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -487,8 +524,13 @@ def run_autopilot_supervisor(
                 promotion_decision = "hold"
                 overall_status = "hold"
             else:
-                promotion_decision = "rollback"
-                if bool(rollback_on_verify_failure):
+                verify_insufficient_data = _verify_failed_for_insufficient_data(verify_detail)
+                if verify_insufficient_data:
+                    promotion_decision = "hold"
+                    overall_status = "hold"
+                    phase_ok = True
+                elif bool(rollback_on_verify_failure):
+                    promotion_decision = "rollback"
                     for action in rollback_plan:
                         result = run_allowlisted_action(
                             action=action,
@@ -510,6 +552,7 @@ def run_autopilot_supervisor(
                             break
                     overall_status = "rolled_back" if phase_ok else "rollback_failed"
                 else:
+                    promotion_decision = "rollback"
                     phase_ok = False
                     overall_status = "failed_verify"
 

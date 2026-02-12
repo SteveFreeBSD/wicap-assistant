@@ -189,6 +189,7 @@ def _simulate_policy_case(case: dict[str, Any]) -> dict[str, Any]:
     recover_threshold = case.get("recover_threshold")
     max_recover_attempts = case.get("max_recover_attempts")
     action_cooldown_cycles = case.get("action_cooldown_cycles")
+    health_probe_interval_cycles = case.get("health_probe_interval_cycles")
 
     include_service_health = bool(case.get("include_service_health", True))
 
@@ -213,6 +214,11 @@ def _simulate_policy_case(case: dict[str, Any]) -> dict[str, Any]:
                 _safe_int(action_cooldown_cycles, default=0)
                 if action_cooldown_cycles is not None
                 else None
+            ),
+            health_probe_interval_cycles=(
+                _safe_int(health_probe_interval_cycles, default=0)
+                if health_probe_interval_cycles is not None
+                else 0
             ),
         )
 

@@ -34,6 +34,7 @@ _TERMINAL_STATES = {"completed", "failed", "escalated", "interrupted"}
 
 _LIVE_DECISION_TO_STEP = {
     "service_health": "observe",
+    "health_probe": "observe",
     "anomaly_route": "plan",
     "anomaly_verify": "verify",
     "threshold_check": "verify",

@@ -39,6 +39,7 @@ def test_record_mission_graph_and_snapshot(tmp_path) -> None:
 
 def test_live_step_type_and_transition_matrix() -> None:
     assert step_type_for_live_event(decision="service_health", status="stable") == "observe"
+    assert step_type_for_live_event(decision="health_probe", status="executed_ok", action="status_check") == "observe"
     assert step_type_for_live_event(decision="service_health", status="down_detected") == "diagnose"
     assert step_type_for_live_event(decision="threshold_recover", status="executed_ok") == "execute"
     assert step_type_for_live_event(decision="escalate", status="escalated") == "reflect"
