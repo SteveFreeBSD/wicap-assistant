@@ -16,6 +16,7 @@ def test_comprehensive_sweep_help() -> None:
     )
     assert result.returncode == 0
     assert "Comprehensive end-to-end sweep for WiCAP + wicap-assistant." in result.stdout
+    assert "--ui-timeout-seconds N" in result.stdout
     assert "--no-start-autopilot-service" in result.stdout
     assert "--run-certifications" in result.stdout
     assert "--strict" in result.stdout
@@ -27,6 +28,7 @@ def test_comprehensive_sweep_wires_expected_substeps() -> None:
     content = script.read_text(encoding="utf-8")
     assert "scripts/autopilot_bootstrap.sh" in content
     assert "--core-only" in content
+    assert "core_reconcile" in content
     assert "scripts/server_rollout_smoke.sh" in content
     assert "scripts/live_testing_gate.sh" in content
     assert "python3 -m wicap_assist.cli --db" in content

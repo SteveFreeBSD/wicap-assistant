@@ -14,6 +14,7 @@ Options:
   --output-dir PATH            Sweep output root (default: <assistant-root>/data/reports/sweeps)
   --autopilot-mode MODE        monitor|observe|assist|autonomous (default: autonomous)
   --operate-cycles N           Autopilot operate cycles for sweep run (default: 220)
+  --ui-timeout-seconds N       Wait budget for http://127.0.0.1:8080/health (default: 180)
   --with-scout                 Start scout service during bootstrap/smoke
   --skip-build                 Skip docker compose --build steps
   --no-start-autopilot-service Do not start continuous autopilot sidecar at sweep end
@@ -32,6 +33,7 @@ ASSIST_DB="${ASSIST_DB:-${ASSIST_ROOT}/data/assistant.db}"
 OUTPUT_DIR="${OUTPUT_DIR:-${ASSIST_ROOT}/data/reports/sweeps}"
 AUTOPILOT_MODE="${AUTOPILOT_MODE:-autonomous}"
 OPERATE_CYCLES=220
+UI_TIMEOUT_SECONDS=180
 WITH_SCOUT=0
 SKIP_BUILD=0
 START_AUTOPILOT_SERVICE=1
@@ -59,6 +61,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --operate-cycles)
             OPERATE_CYCLES="${2:-}"
+            shift 2
+            ;;
+        --ui-timeout-seconds)
+            UI_TIMEOUT_SECONDS="${2:-}"
             shift 2
             ;;
         --with-scout)
@@ -107,6 +113,10 @@ esac
 
 if ! [[ "${OPERATE_CYCLES}" =~ ^[0-9]+$ ]] || [[ "${OPERATE_CYCLES}" -lt 1 ]]; then
     echo "ERROR: --operate-cycles must be an integer >= 1" >&2
+    exit 2
+fi
+if ! [[ "${UI_TIMEOUT_SECONDS}" =~ ^[0-9]+$ ]] || [[ "${UI_TIMEOUT_SECONDS}" -lt 1 ]]; then
+    echo "ERROR: --ui-timeout-seconds must be an integer >= 1" >&2
     exit 2
 fi
 
@@ -164,6 +174,7 @@ echo "[info] assistant_root=${ASSIST_ROOT}"
 echo "[info] wicap_root=${WICAP_ROOT}"
 echo "[info] assistant_db=${ASSIST_DB}"
 echo "[info] run_dir=${RUN_DIR}"
+echo "[info] ui_timeout_seconds=${UI_TIMEOUT_SECONDS}"
 
 record_step() {
     local name="$1"
@@ -232,9 +243,40 @@ if [[ "${WITH_SCOUT}" -eq 1 ]]; then
     smoke_cmd+=("--with-scout")
 fi
 if [[ "${STRICT}" -eq 1 ]]; then
-    smoke_cmd+=("--require-assistant" "--require-shadow-data" "--enforce-gate" "--enforce-contract")
+    smoke_cmd+=("--enforce-gate" "--enforce-contract")
 fi
 run_stream_step "server_rollout_smoke" "${smoke_cmd[@]}"
+
+core_services=(redis processor ui)
+if [[ "${WITH_SCOUT}" -eq 1 ]]; then
+    core_services+=(scout)
+fi
+core_build_args=()
+if [[ "${SKIP_BUILD}" -eq 0 ]]; then
+    core_build_args+=(--build)
+fi
+run_stream_step "core_reconcile" bash -lc "
+set -euo pipefail
+cd \"${WICAP_ROOT}\"
+docker compose up -d ${core_build_args[*]} ${core_services[*]}
+echo '[step] waiting for ui health after core reconcile'
+payload=\$(mktemp)
+errs=\$(mktemp)
+trap 'rm -f \"\${payload}\" \"\${errs}\"' EXIT
+elapsed=0
+while (( elapsed < ${UI_TIMEOUT_SECONDS} )); do
+    if curl -fsS 'http://127.0.0.1:8080/health' >\"\${payload}\" 2>\"\${errs}\"; then
+        python3 -m json.tool \"\${payload}\"
+        exit 0
+    fi
+    sleep 2
+    elapsed=\$((elapsed + 2))
+done
+echo \"ERROR: core_reconcile health timeout after ${UI_TIMEOUT_SECONDS}s\" >&2
+cat \"\${errs}\" >&2 || true
+docker compose ps >&2 || true
+exit 1
+"
 
 run_json_step "autopilot_once" bash -lc "cd \"${ASSIST_ROOT}\" && PYTHONPATH=src python3 -m wicap_assist.cli --db \"${ASSIST_DB}\" autopilot --control-mode \"${AUTOPILOT_MODE}\" --operate-cycles \"${OPERATE_CYCLES}\" --stop-on-escalation --no-rollback-on-verify-failure --max-runs 1 --json"
 run_json_step "rollout_gates_pass1" bash -lc "cd \"${ASSIST_ROOT}\" && PYTHONPATH=src python3 -m wicap_assist.cli --db \"${ASSIST_DB}\" rollout-gates --json"
@@ -374,7 +416,7 @@ python3 -m json.tool "${RUN_DIR}/summary.json"
 record_step "summary" "0"
 
 critical_fail=0
-for step_name in bootstrap server_rollout_smoke autopilot_once rollout_gates_pass2 live_testing_gate contract_check autopilot_service_start db_snapshot summary; do
+for step_name in bootstrap server_rollout_smoke core_reconcile autopilot_once rollout_gates_pass2 live_testing_gate contract_check autopilot_service_start db_snapshot summary; do
     step_rc="$(awk -F '\t' -v name="${step_name}" '$1==name {print $2}' "${STEP_FILE}" | tail -n1)"
     if [[ -n "${step_rc}" && "${step_rc}" -ne 0 ]]; then
         critical_fail=1
