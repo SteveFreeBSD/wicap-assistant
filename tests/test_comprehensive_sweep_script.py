@@ -32,6 +32,9 @@ def test_comprehensive_sweep_wires_expected_substeps() -> None:
     assert "scripts/server_rollout_smoke.sh" in content
     assert "scripts/live_testing_gate.sh" in content
     assert "--no-enforce-contract" in content
+    assert "autopilot_quiesce" in content
+    assert "--gate-history-file" in content
+    assert "--history-file" in content
     assert "--enforce --json" in content
     assert "--operate-interval-seconds" in content
     assert "--no-rollback-on-verify-failure" in content

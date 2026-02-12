@@ -12,6 +12,7 @@ import sqlite3
 import subprocess
 import time
 from typing import Any, Callable
+from uuid import uuid4
 
 from wicap_assist.actuators import run_allowlisted_action
 from wicap_assist.certification import run_chaos_certification, run_replay_certification
@@ -75,6 +76,11 @@ def _run_id_stamp(now_text: str) -> str:
         parsed = parsed.replace(tzinfo=timezone.utc)
     parsed = parsed.astimezone(timezone.utc)
     return parsed.strftime("%Y%m%d%H%M%SZ")
+
+
+def _next_run_id(*, started_ts: str, run_index: int) -> str:
+    suffix = uuid4().hex[:8]
+    return f"autopilot-{_run_id_stamp(started_ts)}-{int(run_index)}-{suffix}"
 
 
 def _runtime_contract_ok(
@@ -256,33 +262,43 @@ def run_autopilot_supervisor(
     while infinite or run_index < cycle_limit:
         run_index += 1
         started_ts = str(now_fn())
-        run_id = f"autopilot-{_run_id_stamp(started_ts)}-{run_index}"
-        run_row_id = insert_autopilot_run(
-            conn,
-            run_id=run_id,
-            ts_started=started_ts,
-            mode=resolved_mode,
-            status="running",
-            config_json={
-                "mode": resolved_mode,
-                "repo_root": str(resolved_repo_root),
-                "require_runtime_contract": bool(require_runtime_contract),
-                "require_scout": bool(require_scout),
-                "perform_startup": bool(perform_startup),
-                "startup_actions": list(startup_plan),
-                "operate_cycles": int(max(1, int(operate_cycles))),
-                "operate_interval_seconds": float(max(0.1, float(operate_interval_seconds))),
-                "stop_on_escalation": bool(stop_on_escalation),
-                "verify_replay": bool(verify_replay),
-                "verify_chaos": bool(verify_chaos),
-                "certification_profile": str(certification_profile),
-                "gate_history_file": str(Path(gate_history_file)),
-                "required_consecutive_passes": int(max(1, int(required_consecutive_passes))),
-                "rollback_on_verify_failure": bool(rollback_on_verify_failure),
-                "rollback_actions": list(rollback_plan),
-            },
-            summary_json={},
-        )
+        run_id = ""
+        run_row_id: int | None = None
+        for _ in range(5):
+            run_id = _next_run_id(started_ts=started_ts, run_index=run_index)
+            try:
+                run_row_id = insert_autopilot_run(
+                    conn,
+                    run_id=run_id,
+                    ts_started=started_ts,
+                    mode=resolved_mode,
+                    status="running",
+                    config_json={
+                        "mode": resolved_mode,
+                        "repo_root": str(resolved_repo_root),
+                        "require_runtime_contract": bool(require_runtime_contract),
+                        "require_scout": bool(require_scout),
+                        "perform_startup": bool(perform_startup),
+                        "startup_actions": list(startup_plan),
+                        "operate_cycles": int(max(1, int(operate_cycles))),
+                        "operate_interval_seconds": float(max(0.1, float(operate_interval_seconds))),
+                        "stop_on_escalation": bool(stop_on_escalation),
+                        "verify_replay": bool(verify_replay),
+                        "verify_chaos": bool(verify_chaos),
+                        "certification_profile": str(certification_profile),
+                        "gate_history_file": str(Path(gate_history_file)),
+                        "required_consecutive_passes": int(max(1, int(required_consecutive_passes))),
+                        "rollback_on_verify_failure": bool(rollback_on_verify_failure),
+                        "rollback_actions": list(rollback_plan),
+                    },
+                    summary_json={},
+                )
+                break
+            except sqlite3.IntegrityError:
+                run_row_id = None
+                continue
+        if run_row_id is None:
+            raise RuntimeError("failed to allocate unique autopilot run_id")
         conn.commit()
 
         phase_results: list[dict[str, Any]] = []

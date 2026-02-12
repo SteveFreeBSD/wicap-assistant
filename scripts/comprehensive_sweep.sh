@@ -188,6 +188,7 @@ SWEEP_TS="$(date -u +%Y%m%dT%H%M%SZ)"
 RUN_DIR="${OUTPUT_DIR}/sweep-${SWEEP_TS}"
 mkdir -p "${RUN_DIR}"
 STEP_FILE="${RUN_DIR}/steps.tsv"
+GATE_HISTORY_FILE="${RUN_DIR}/rollout_gates_history.jsonl"
 touch "${STEP_FILE}"
 
 echo "[info] assistant_root=${ASSIST_ROOT}"
@@ -197,6 +198,7 @@ echo "[info] run_dir=${RUN_DIR}"
 echo "[info] ui_timeout_seconds=${UI_TIMEOUT_SECONDS}"
 echo "[info] max_gate_retries=${MAX_GATE_RETRIES}"
 echo "[info] operate_interval_seconds=${OPERATE_INTERVAL_SECONDS}"
+echo "[info] gate_history_file=${GATE_HISTORY_FILE}"
 
 record_step() {
     local name="$1"
@@ -267,6 +269,9 @@ print(f"{samples} {minimum}")
 PY
 }
 
+# Prevent concurrent supervisor runs from flapping runtime state or colliding run IDs.
+run_stream_step "autopilot_quiesce" bash -lc "cd \"${ASSIST_ROOT}\" && docker compose -f compose.assistant.yml --profile autopilot stop wicap-assist-autopilot >/dev/null 2>&1 || true && docker compose -f compose.assistant.yml --profile autopilot rm -f wicap-assist-autopilot >/dev/null 2>&1 || true"
+
 if [[ "${DO_BOOTSTRAP}" -eq 1 ]]; then
     bootstrap_cmd=("${ASSIST_ROOT}/scripts/autopilot_bootstrap.sh" "--wicap-root" "${WICAP_ROOT}" "--autopilot-mode" "${AUTOPILOT_MODE}" "--core-only")
     if [[ "${WITH_SCOUT}" -eq 1 ]]; then
@@ -323,12 +328,12 @@ docker compose ps >&2 || true
 exit 1
 "
 
-run_json_step "autopilot_once" bash -lc "cd \"${ASSIST_ROOT}\" && PYTHONPATH=src python3 -m wicap_assist.cli --db \"${ASSIST_DB}\" autopilot --control-mode \"${AUTOPILOT_MODE}\" --operate-cycles \"${OPERATE_CYCLES}\" --operate-interval-seconds \"${OPERATE_INTERVAL_SECONDS}\" --no-rollback-on-verify-failure --max-runs 1 --json" || true
-run_json_step "rollout_gates_pass1" bash -lc "cd \"${ASSIST_ROOT}\" && PYTHONPATH=src python3 -m wicap_assist.cli --db \"${ASSIST_DB}\" rollout-gates --json" || true
+run_json_step "autopilot_once" bash -lc "cd \"${ASSIST_ROOT}\" && PYTHONPATH=src python3 -m wicap_assist.cli --db \"${ASSIST_DB}\" autopilot --control-mode \"${AUTOPILOT_MODE}\" --operate-cycles \"${OPERATE_CYCLES}\" --operate-interval-seconds \"${OPERATE_INTERVAL_SECONDS}\" --gate-history-file \"${GATE_HISTORY_FILE}\" --no-rollback-on-verify-failure --max-runs 1 --json" || true
+run_json_step "rollout_gates_pass1" bash -lc "cd \"${ASSIST_ROOT}\" && PYTHONPATH=src python3 -m wicap_assist.cli --db \"${ASSIST_DB}\" rollout-gates --history-file \"${GATE_HISTORY_FILE}\" --json" || true
 if [[ "${STRICT}" -eq 1 ]]; then
-    run_json_step "rollout_gates_pass2" bash -lc "cd \"${ASSIST_ROOT}\" && PYTHONPATH=src python3 -m wicap_assist.cli --db \"${ASSIST_DB}\" rollout-gates --enforce --json" || true
+    run_json_step "rollout_gates_pass2" bash -lc "cd \"${ASSIST_ROOT}\" && PYTHONPATH=src python3 -m wicap_assist.cli --db \"${ASSIST_DB}\" rollout-gates --history-file \"${GATE_HISTORY_FILE}\" --enforce --json" || true
 else
-    run_json_step "rollout_gates_pass2" bash -lc "cd \"${ASSIST_ROOT}\" && PYTHONPATH=src python3 -m wicap_assist.cli --db \"${ASSIST_DB}\" rollout-gates --json" || true
+    run_json_step "rollout_gates_pass2" bash -lc "cd \"${ASSIST_ROOT}\" && PYTHONPATH=src python3 -m wicap_assist.cli --db \"${ASSIST_DB}\" rollout-gates --history-file \"${GATE_HISTORY_FILE}\" --json" || true
 fi
 
 FINAL_GATE_STEP="rollout_gates_pass2"
@@ -348,17 +353,15 @@ if [[ "${STRICT}" -eq 1 ]]; then
                 read -r shadow_samples shadow_min_samples < <(shadow_gate_sample_tuple "${prior_gate_json}")
                 if [[ "${shadow_min_samples}" -gt 0 && "${shadow_samples}" -lt "${shadow_min_samples}" ]]; then
                     shadow_deficit=$((shadow_min_samples - shadow_samples))
-                    target_cycles=$((shadow_deficit + 10))
-                    if [[ "${target_cycles}" -gt "${retry_cycles}" ]]; then
-                        retry_cycles="${target_cycles}"
-                    fi
+                    retry_cycles=$((retry_cycles + shadow_deficit + 10))
                     echo "[info] shadow sample deficit=${shadow_deficit}; retry operate_cycles=${retry_cycles}"
                 fi
             fi
             FINAL_AUTOPILOT_STEP="autopilot_retry${retry}"
-            run_json_step "${FINAL_AUTOPILOT_STEP}" bash -lc "cd \"${ASSIST_ROOT}\" && PYTHONPATH=src python3 -m wicap_assist.cli --db \"${ASSIST_DB}\" autopilot --control-mode \"${retry_mode}\" --operate-cycles \"${retry_cycles}\" --operate-interval-seconds \"${OPERATE_INTERVAL_SECONDS}\" --no-rollback-on-verify-failure --max-runs 1 --json" || true
+            run_json_step "${FINAL_AUTOPILOT_STEP}" bash -lc "cd \"${ASSIST_ROOT}\" && PYTHONPATH=src python3 -m wicap_assist.cli --db \"${ASSIST_DB}\" autopilot --control-mode \"${retry_mode}\" --operate-cycles \"${retry_cycles}\" --operate-interval-seconds \"${OPERATE_INTERVAL_SECONDS}\" --gate-history-file \"${GATE_HISTORY_FILE}\" --no-rollback-on-verify-failure --max-runs 1 --json" || true
+            run_json_step "rollout_gates_retry${retry}_pass1" bash -lc "cd \"${ASSIST_ROOT}\" && PYTHONPATH=src python3 -m wicap_assist.cli --db \"${ASSIST_DB}\" rollout-gates --history-file \"${GATE_HISTORY_FILE}\" --json" || true
             FINAL_GATE_STEP="rollout_gates_retry${retry}"
-            run_json_step "${FINAL_GATE_STEP}" bash -lc "cd \"${ASSIST_ROOT}\" && PYTHONPATH=src python3 -m wicap_assist.cli --db \"${ASSIST_DB}\" rollout-gates --enforce --json" || true
+            run_json_step "${FINAL_GATE_STEP}" bash -lc "cd \"${ASSIST_ROOT}\" && PYTHONPATH=src python3 -m wicap_assist.cli --db \"${ASSIST_DB}\" rollout-gates --history-file \"${GATE_HISTORY_FILE}\" --enforce --json" || true
             gate_rc="$(latest_step_rc "${FINAL_GATE_STEP}")"
             if [[ -n "${gate_rc}" && "${gate_rc}" -eq 0 ]]; then
                 break
@@ -370,7 +373,7 @@ live_gate_cmd=(
     "${ASSIST_ROOT}/scripts/live_testing_gate.sh"
     "${ASSIST_DB}"
     "${RUN_DIR}"
-    "${ASSIST_ROOT}/data/reports/rollout_gates_history.jsonl"
+    "${GATE_HISTORY_FILE}"
     "--no-enforce-contract"
     "--no-enforce-rollout"
 )
