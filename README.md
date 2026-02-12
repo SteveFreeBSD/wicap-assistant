@@ -117,6 +117,7 @@ One-command comprehensive sweep (bootstrap + smoke + gates + autopilot + snapsho
 cd /opt/wicap-assistant
 ./scripts/comprehensive_sweep.sh --strict --run-certifications
 ```
+The comprehensive sweep bootstraps core services first, runs a high-sample autopilot warmup/verify pass, then starts the continuous autopilot sidecar at the end (disable with `--no-start-autopilot-service`).
 Optional strict mode with capture + enforced gates:
 ```bash
 cd /opt/wicap-assistant

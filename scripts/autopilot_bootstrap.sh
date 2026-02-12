@@ -10,6 +10,7 @@ One-command clean-boot bootstrap for WiCAP core + assistant autopilot.
 Options:
   --wicap-root PATH            Override WiCAP repo root (auto-detected by default)
   --autopilot-mode MODE        monitor|observe|assist|autonomous (default: autonomous)
+  --core-only                  Start WiCAP core only (skip assistant autopilot sidecar)
   --with-scout                 Start scout service alongside core services
   --skip-build                 Skip docker compose --build for both repos
   --ui-timeout-seconds N       Wait budget for http://127.0.0.1:8080/health (default: 180)
@@ -25,6 +26,7 @@ AUTOPILOT_MODE="${AUTOPILOT_MODE:-autonomous}"
 WITH_SCOUT=0
 SKIP_BUILD=0
 UI_TIMEOUT_SECONDS=180
+START_AUTOPILOT=1
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -38,6 +40,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --with-scout)
             WITH_SCOUT=1
+            shift
+            ;;
+        --core-only)
+            START_AUTOPILOT=0
             shift
             ;;
         --skip-build)
@@ -158,16 +164,22 @@ fi
 
 python3 -m json.tool "${health_payload}"
 
-echo "[step] starting assistant autopilot service"
-(
-    cd "${ASSIST_ROOT}" && \
-    WICAP_HOST_REPO_ROOT="${WICAP_ROOT}" \
-    WICAP_ASSIST_AUTOPILOT_MODE="${AUTOPILOT_MODE}" \
-    docker compose -f compose.assistant.yml --profile autopilot up -d "${build_args[@]}" wicap-assist-autopilot
-)
+if [[ "${START_AUTOPILOT}" -eq 1 ]]; then
+    echo "[step] starting assistant autopilot service"
+    (
+        cd "${ASSIST_ROOT}" && \
+        WICAP_HOST_REPO_ROOT="${WICAP_ROOT}" \
+        WICAP_ASSIST_AUTOPILOT_MODE="${AUTOPILOT_MODE}" \
+        docker compose -f compose.assistant.yml --profile autopilot up -d "${build_args[@]}" wicap-assist-autopilot
+    )
 
-echo "[step] autopilot service status"
-(cd "${ASSIST_ROOT}" && docker compose -f compose.assistant.yml --profile autopilot ps wicap-assist-autopilot)
+    echo "[step] autopilot service status"
+    (cd "${ASSIST_ROOT}" && docker compose -f compose.assistant.yml --profile autopilot ps wicap-assist-autopilot)
+else
+    echo "[step] skipping autopilot sidecar start (--core-only)"
+fi
 
 echo "[pass] bootstrap complete"
-echo "[next] tail logs: docker compose -f ${ASSIST_ROOT}/compose.assistant.yml --profile autopilot logs -f wicap-assist-autopilot"
+if [[ "${START_AUTOPILOT}" -eq 1 ]]; then
+    echo "[next] tail logs: docker compose -f ${ASSIST_ROOT}/compose.assistant.yml --profile autopilot logs -f wicap-assist-autopilot"
+fi

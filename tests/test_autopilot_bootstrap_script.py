@@ -17,6 +17,7 @@ def test_autopilot_bootstrap_help() -> None:
     assert result.returncode == 0
     assert "One-command clean-boot bootstrap for WiCAP core + assistant autopilot." in result.stdout
     assert "--autopilot-mode MODE" in result.stdout
+    assert "--core-only" in result.stdout
     assert "--with-scout" in result.stdout
 
 

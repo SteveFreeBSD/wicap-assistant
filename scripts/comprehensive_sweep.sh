@@ -13,9 +13,10 @@ Options:
   --assistant-db PATH          Assistant DB path (default: <assistant-root>/data/assistant.db)
   --output-dir PATH            Sweep output root (default: <assistant-root>/data/reports/sweeps)
   --autopilot-mode MODE        monitor|observe|assist|autonomous (default: autonomous)
-  --operate-cycles N           Autopilot operate cycles for sweep run (default: 20)
+  --operate-cycles N           Autopilot operate cycles for sweep run (default: 220)
   --with-scout                 Start scout service during bootstrap/smoke
   --skip-build                 Skip docker compose --build steps
+  --no-start-autopilot-service Do not start continuous autopilot sidecar at sweep end
   --run-certifications         Include replay/chaos certification checks
   --strict                     Fail command if any critical step fails
   --no-bootstrap               Skip bootstrap phase (assumes services already up)
@@ -30,9 +31,10 @@ WICAP_ROOT="${WICAP_ROOT:-}"
 ASSIST_DB="${ASSIST_DB:-${ASSIST_ROOT}/data/assistant.db}"
 OUTPUT_DIR="${OUTPUT_DIR:-${ASSIST_ROOT}/data/reports/sweeps}"
 AUTOPILOT_MODE="${AUTOPILOT_MODE:-autonomous}"
-OPERATE_CYCLES=20
+OPERATE_CYCLES=220
 WITH_SCOUT=0
 SKIP_BUILD=0
+START_AUTOPILOT_SERVICE=1
 RUN_CERTIFICATIONS=0
 STRICT=0
 DO_BOOTSTRAP=1
@@ -65,6 +67,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --skip-build)
             SKIP_BUILD=1
+            shift
+            ;;
+        --no-start-autopilot-service)
+            START_AUTOPILOT_SERVICE=0
             shift
             ;;
         --run-certifications)
@@ -142,6 +148,11 @@ if [[ -z "${WICAP_ROOT}" ]]; then
     exit 2
 fi
 
+build_args=()
+if [[ "${SKIP_BUILD}" -eq 0 ]]; then
+    build_args+=(--build)
+fi
+
 mkdir -p "${OUTPUT_DIR}"
 SWEEP_TS="$(date -u +%Y%m%dT%H%M%SZ)"
 RUN_DIR="${OUTPUT_DIR}/sweep-${SWEEP_TS}"
@@ -198,7 +209,7 @@ run_json_step() {
 }
 
 if [[ "${DO_BOOTSTRAP}" -eq 1 ]]; then
-    bootstrap_cmd=("${ASSIST_ROOT}/scripts/autopilot_bootstrap.sh" "--wicap-root" "${WICAP_ROOT}" "--autopilot-mode" "${AUTOPILOT_MODE}")
+    bootstrap_cmd=("${ASSIST_ROOT}/scripts/autopilot_bootstrap.sh" "--wicap-root" "${WICAP_ROOT}" "--autopilot-mode" "${AUTOPILOT_MODE}" "--core-only")
     if [[ "${WITH_SCOUT}" -eq 1 ]]; then
         bootstrap_cmd+=("--with-scout")
     fi
@@ -225,10 +236,11 @@ if [[ "${STRICT}" -eq 1 ]]; then
 fi
 run_stream_step "server_rollout_smoke" "${smoke_cmd[@]}"
 
+run_json_step "autopilot_once" bash -lc "cd \"${ASSIST_ROOT}\" && PYTHONPATH=src python3 -m wicap_assist.cli --db \"${ASSIST_DB}\" autopilot --control-mode \"${AUTOPILOT_MODE}\" --operate-cycles \"${OPERATE_CYCLES}\" --stop-on-escalation --no-rollback-on-verify-failure --max-runs 1 --json"
+run_json_step "rollout_gates_pass1" bash -lc "cd \"${ASSIST_ROOT}\" && PYTHONPATH=src python3 -m wicap_assist.cli --db \"${ASSIST_DB}\" rollout-gates --json"
+run_json_step "rollout_gates_pass2" bash -lc "cd \"${ASSIST_ROOT}\" && PYTHONPATH=src python3 -m wicap_assist.cli --db \"${ASSIST_DB}\" rollout-gates --json"
 run_stream_step "live_testing_gate" "${ASSIST_ROOT}/scripts/live_testing_gate.sh" "${ASSIST_DB}" "${RUN_DIR}" "${ASSIST_ROOT}/data/reports/rollout_gates_history.jsonl"
 
-run_json_step "autopilot_once" bash -lc "cd \"${ASSIST_ROOT}\" && PYTHONPATH=src python3 -m wicap_assist.cli --db \"${ASSIST_DB}\" autopilot --control-mode \"${AUTOPILOT_MODE}\" --operate-cycles \"${OPERATE_CYCLES}\" --stop-on-escalation --no-rollback-on-verify-failure --max-runs 1 --json"
-run_json_step "rollout_gates" bash -lc "cd \"${ASSIST_ROOT}\" && PYTHONPATH=src python3 -m wicap_assist.cli --db \"${ASSIST_DB}\" rollout-gates --json"
 run_json_step "contract_check" bash -lc "cd \"${ASSIST_ROOT}\" && PYTHONPATH=src python3 -m wicap_assist.cli --db \"${ASSIST_DB}\" contract-check --json --no-enforce"
 run_json_step "failover_state" bash -lc "cd \"${ASSIST_ROOT}\" && PYTHONPATH=src python3 -m wicap_assist.cli --db \"${ASSIST_DB}\" agent failover-state --json"
 run_json_step "policy_explain" bash -lc "cd \"${ASSIST_ROOT}\" && PYTHONPATH=src python3 -m wicap_assist.cli --db \"${ASSIST_DB}\" agent explain-policy --json"
@@ -238,6 +250,13 @@ run_json_step "backfill_report" bash -lc "cd \"${ASSIST_ROOT}\" && PYTHONPATH=sr
 if [[ "${RUN_CERTIFICATIONS}" -eq 1 ]]; then
     run_json_step "replay_certify" bash -lc "cd \"${ASSIST_ROOT}\" && PYTHONPATH=src python3 -m wicap_assist.cli --db \"${ASSIST_DB}\" agent replay-certify --profile default --json"
     run_json_step "chaos_certify" bash -lc "cd \"${ASSIST_ROOT}\" && PYTHONPATH=src python3 -m wicap_assist.cli --db \"${ASSIST_DB}\" agent chaos-certify --profile default --json"
+fi
+
+if [[ "${START_AUTOPILOT_SERVICE}" -eq 1 ]]; then
+    run_stream_step "autopilot_service_start" bash -lc "cd \"${ASSIST_ROOT}\" && WICAP_HOST_REPO_ROOT=\"${WICAP_ROOT}\" WICAP_ASSIST_AUTOPILOT_MODE=\"${AUTOPILOT_MODE}\" docker compose -f compose.assistant.yml --profile autopilot up -d ${build_args[*]} wicap-assist-autopilot && docker compose -f compose.assistant.yml --profile autopilot ps wicap-assist-autopilot"
+else
+    echo "[step] skipping autopilot sidecar start (--no-start-autopilot-service)"
+    record_step "autopilot_service_start" "0"
 fi
 
 echo "[step] snapshotting db control/mission summary"
@@ -303,9 +322,20 @@ def load_json(name: str):
         return None
 
 autopilot = load_json("autopilot_once")
-rollout = load_json("rollout_gates")
+rollout = load_json("rollout_gates_pass2")
 contract = load_json("contract_check")
 db_snapshot = load_json("db_snapshot")
+
+preflight_detail = None
+if isinstance(autopilot, dict):
+    latest = autopilot.get("latest", {})
+    if isinstance(latest, dict):
+        phases = latest.get("phase_results", [])
+        if isinstance(phases, list):
+            for item in phases:
+                if isinstance(item, dict) and str(item.get("phase", "")).strip() == "preflight":
+                    preflight_detail = item.get("detail")
+                    break
 
 summary = {
     "run_dir": str(run_dir),
@@ -321,6 +351,7 @@ summary = {
         if isinstance(autopilot, dict)
         else None
     ),
+    "autopilot_preflight_detail": preflight_detail,
     "rollout_overall_pass": (
         rollout.get("overall_pass")
         if isinstance(rollout, dict)
@@ -343,7 +374,7 @@ python3 -m json.tool "${RUN_DIR}/summary.json"
 record_step "summary" "0"
 
 critical_fail=0
-for step_name in bootstrap server_rollout_smoke live_testing_gate autopilot_once rollout_gates contract_check db_snapshot summary; do
+for step_name in bootstrap server_rollout_smoke autopilot_once rollout_gates_pass2 live_testing_gate contract_check autopilot_service_start db_snapshot summary; do
     step_rc="$(awk -F '\t' -v name="${step_name}" '$1==name {print $2}' "${STEP_FILE}" | tail -n1)"
     if [[ -n "${step_rc}" && "${step_rc}" -ne 0 ]]; then
         critical_fail=1
