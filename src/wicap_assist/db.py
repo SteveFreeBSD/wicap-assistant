@@ -230,6 +230,57 @@ CREATE TABLE IF NOT EXISTS decision_features (
     FOREIGN KEY(episode_id) REFERENCES episodes(id) ON DELETE SET NULL
 );
 
+CREATE TABLE IF NOT EXISTS forecast_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts TEXT NOT NULL,
+    source TEXT NOT NULL,
+    horizon_sec INTEGER NOT NULL,
+    risk_score REAL NOT NULL,
+    confidence_low REAL,
+    confidence_high REAL,
+    signature TEXT,
+    summary TEXT,
+    payload_json TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS drift_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts TEXT NOT NULL,
+    source TEXT NOT NULL,
+    status TEXT NOT NULL,
+    delta REAL NOT NULL,
+    long_mean REAL,
+    short_mean REAL,
+    sample_count INTEGER,
+    payload_json TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS model_shadow_metrics (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts TEXT NOT NULL,
+    source TEXT NOT NULL,
+    decision TEXT NOT NULL,
+    action TEXT,
+    model_id TEXT NOT NULL,
+    score REAL,
+    vote INTEGER NOT NULL,
+    agreement REAL,
+    payload_json TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS proactive_action_outcomes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts TEXT NOT NULL,
+    control_session_id INTEGER,
+    action TEXT NOT NULL,
+    decision TEXT NOT NULL,
+    status TEXT NOT NULL,
+    trigger_risk_score REAL,
+    horizon_sec INTEGER,
+    payload_json TEXT NOT NULL,
+    FOREIGN KEY(control_session_id) REFERENCES control_sessions(id) ON DELETE SET NULL
+);
+
 CREATE TABLE IF NOT EXISTS schema_migrations (
     version INTEGER PRIMARY KEY,
     name TEXT NOT NULL,
@@ -319,6 +370,63 @@ _MIGRATIONS: tuple[tuple[int, str, tuple[str, ...]], ...] = (
             "CREATE INDEX IF NOT EXISTS idx_decision_features_action_status_ts ON decision_features(action, status, ts)",
         ),
     ),
+    (
+        4,
+        "forecast_drift_and_proactive_tables",
+        (
+            "CREATE TABLE IF NOT EXISTS forecast_events ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            "ts TEXT NOT NULL,"
+            "source TEXT NOT NULL,"
+            "horizon_sec INTEGER NOT NULL,"
+            "risk_score REAL NOT NULL,"
+            "confidence_low REAL,"
+            "confidence_high REAL,"
+            "signature TEXT,"
+            "summary TEXT,"
+            "payload_json TEXT NOT NULL"
+            ")",
+            "CREATE TABLE IF NOT EXISTS drift_events ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            "ts TEXT NOT NULL,"
+            "source TEXT NOT NULL,"
+            "status TEXT NOT NULL,"
+            "delta REAL NOT NULL,"
+            "long_mean REAL,"
+            "short_mean REAL,"
+            "sample_count INTEGER,"
+            "payload_json TEXT NOT NULL"
+            ")",
+            "CREATE TABLE IF NOT EXISTS model_shadow_metrics ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            "ts TEXT NOT NULL,"
+            "source TEXT NOT NULL,"
+            "decision TEXT NOT NULL,"
+            "action TEXT,"
+            "model_id TEXT NOT NULL,"
+            "score REAL,"
+            "vote INTEGER NOT NULL,"
+            "agreement REAL,"
+            "payload_json TEXT NOT NULL"
+            ")",
+            "CREATE TABLE IF NOT EXISTS proactive_action_outcomes ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            "ts TEXT NOT NULL,"
+            "control_session_id INTEGER,"
+            "action TEXT NOT NULL,"
+            "decision TEXT NOT NULL,"
+            "status TEXT NOT NULL,"
+            "trigger_risk_score REAL,"
+            "horizon_sec INTEGER,"
+            "payload_json TEXT NOT NULL,"
+            "FOREIGN KEY(control_session_id) REFERENCES control_sessions(id) ON DELETE SET NULL"
+            ")",
+            "CREATE INDEX IF NOT EXISTS idx_forecast_events_ts_horizon ON forecast_events(ts, horizon_sec)",
+            "CREATE INDEX IF NOT EXISTS idx_drift_events_ts_status ON drift_events(ts, status)",
+            "CREATE INDEX IF NOT EXISTS idx_model_shadow_metrics_ts_model ON model_shadow_metrics(ts, model_id)",
+            "CREATE INDEX IF NOT EXISTS idx_proactive_action_outcomes_session_ts ON proactive_action_outcomes(control_session_id, ts)",
+        ),
+    ),
 )
 
 
@@ -335,6 +443,7 @@ def connect_db(path: str | Path = DEFAULT_DB_PATH) -> sqlite3.Connection:
     _ensure_sessions_git_columns(conn)
     _ensure_control_session_columns(conn)
     _apply_migrations(conn)
+    _ensure_model_shadow_source_column(conn)
     conn.commit()
     return conn
 
@@ -388,6 +497,20 @@ def _ensure_control_session_columns(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE control_sessions ADD COLUMN last_heartbeat_ts TEXT")
     if "handoff_state" not in columns:
         conn.execute("ALTER TABLE control_sessions ADD COLUMN handoff_state TEXT")
+
+
+def _ensure_model_shadow_source_column(conn: sqlite3.Connection) -> None:
+    """Ensure legacy model_shadow_metrics tables include source column."""
+    rows = conn.execute("PRAGMA table_info(model_shadow_metrics)").fetchall()
+    if not rows:
+        return
+    columns = {str(row["name"]) for row in rows}
+    if "source" not in columns:
+        conn.execute("ALTER TABLE model_shadow_metrics ADD COLUMN source TEXT")
+        conn.execute("UPDATE model_shadow_metrics SET source = 'legacy' WHERE source IS NULL OR trim(source) = ''")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_model_shadow_metrics_source_ts ON model_shadow_metrics(source, ts)"
+    )
 
 
 def upsert_source(conn: sqlite3.Connection, kind: str, path: str, mtime: float, size: int) -> int:
@@ -1255,3 +1378,220 @@ def close_running_control_sessions(
         )
         count += 1
     return count
+
+
+# ---------------------------------------------------------------------------
+# Forecast / drift / shadow metrics helpers
+# ---------------------------------------------------------------------------
+
+
+def delete_forecast_events_for_source(conn: sqlite3.Connection, source: str) -> None:
+    """Delete forecast events for one source path."""
+    conn.execute("DELETE FROM forecast_events WHERE source = ?", (str(source),))
+
+
+def delete_drift_events_for_source(conn: sqlite3.Connection, source: str) -> None:
+    """Delete drift events for one source path."""
+    conn.execute("DELETE FROM drift_events WHERE source = ?", (str(source),))
+
+
+def delete_model_shadow_metrics_for_source(conn: sqlite3.Connection, source: str) -> None:
+    """Delete model shadow metrics for one source path."""
+    conn.execute("DELETE FROM model_shadow_metrics WHERE source = ?", (str(source),))
+
+
+def insert_forecast_event(
+    conn: sqlite3.Connection,
+    *,
+    ts: str,
+    source: str,
+    horizon_sec: int,
+    risk_score: float,
+    confidence_low: float | None,
+    confidence_high: float | None,
+    signature: str | None,
+    summary: str | None,
+    payload_json: dict[str, Any] | None = None,
+) -> int:
+    """Insert one forecast event and return row id."""
+    cur = conn.execute(
+        """
+        INSERT INTO forecast_events(
+            ts, source, horizon_sec, risk_score, confidence_low, confidence_high,
+            signature, summary, payload_json
+        )
+        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            str(ts),
+            str(source),
+            int(horizon_sec),
+            float(risk_score),
+            float(confidence_low) if confidence_low is not None else None,
+            float(confidence_high) if confidence_high is not None else None,
+            str(signature).strip() if signature is not None else None,
+            str(summary).strip() if summary is not None else None,
+            json.dumps(payload_json or {}, sort_keys=True),
+        ),
+    )
+    if cur.lastrowid is None:
+        raise RuntimeError("Failed to insert forecast event row")
+    return int(cur.lastrowid)
+
+
+def insert_drift_event(
+    conn: sqlite3.Connection,
+    *,
+    ts: str,
+    source: str,
+    status: str,
+    delta: float,
+    long_mean: float | None,
+    short_mean: float | None,
+    sample_count: int | None,
+    payload_json: dict[str, Any] | None = None,
+) -> int:
+    """Insert one drift event and return row id."""
+    cur = conn.execute(
+        """
+        INSERT INTO drift_events(
+            ts, source, status, delta, long_mean, short_mean, sample_count, payload_json
+        )
+        VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            str(ts),
+            str(source),
+            str(status).strip() or "stable",
+            float(delta),
+            float(long_mean) if long_mean is not None else None,
+            float(short_mean) if short_mean is not None else None,
+            int(sample_count) if sample_count is not None else None,
+            json.dumps(payload_json or {}, sort_keys=True),
+        ),
+    )
+    if cur.lastrowid is None:
+        raise RuntimeError("Failed to insert drift event row")
+    return int(cur.lastrowid)
+
+
+def insert_model_shadow_metric(
+    conn: sqlite3.Connection,
+    *,
+    ts: str,
+    source: str,
+    decision: str,
+    action: str | None,
+    model_id: str,
+    score: float | None,
+    vote: int | bool,
+    agreement: float | None,
+    payload_json: dict[str, Any] | None = None,
+) -> int:
+    """Insert one model shadow metric row and return row id."""
+    cur = conn.execute(
+        """
+        INSERT INTO model_shadow_metrics(
+            ts, source, decision, action, model_id, score, vote, agreement, payload_json
+        )
+        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            str(ts),
+            str(source),
+            str(decision).strip() or "unknown",
+            str(action).strip() if action is not None else None,
+            str(model_id).strip() or "shadow",
+            float(score) if score is not None else None,
+            int(bool(vote)),
+            float(agreement) if agreement is not None else None,
+            json.dumps(payload_json or {}, sort_keys=True),
+        ),
+    )
+    if cur.lastrowid is None:
+        raise RuntimeError("Failed to insert model shadow metric row")
+    return int(cur.lastrowid)
+
+
+def insert_proactive_action_outcome(
+    conn: sqlite3.Connection,
+    *,
+    ts: str,
+    control_session_id: int | None,
+    action: str,
+    decision: str,
+    status: str,
+    trigger_risk_score: float | None,
+    horizon_sec: int | None,
+    payload_json: dict[str, Any] | None = None,
+) -> int:
+    """Insert one proactive action outcome row and return row id."""
+    cur = conn.execute(
+        """
+        INSERT INTO proactive_action_outcomes(
+            ts, control_session_id, action, decision, status,
+            trigger_risk_score, horizon_sec, payload_json
+        )
+        VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            str(ts),
+            int(control_session_id) if control_session_id is not None else None,
+            str(action).strip(),
+            str(decision).strip(),
+            str(status).strip(),
+            float(trigger_risk_score) if trigger_risk_score is not None else None,
+            int(horizon_sec) if horizon_sec is not None else None,
+            json.dumps(payload_json or {}, sort_keys=True),
+        ),
+    )
+    if cur.lastrowid is None:
+        raise RuntimeError("Failed to insert proactive action outcome row")
+    return int(cur.lastrowid)
+
+
+def summarize_recent_drift(
+    conn: sqlite3.Connection,
+    *,
+    limit: int = 200,
+) -> dict[str, Any]:
+    """Summarize recent drift rows for CLI dashboards."""
+    rows = conn.execute(
+        """
+        SELECT ts, status, delta, long_mean, short_mean, sample_count, source
+        FROM drift_events
+        ORDER BY id DESC
+        LIMIT ?
+        """,
+        (max(1, int(limit)),),
+    ).fetchall()
+    stable = 0
+    drift = 0
+    max_delta = 0.0
+    latest: dict[str, Any] | None = None
+    for row in rows:
+        status = str(row["status"] or "").strip().lower()
+        delta = float(row["delta"] or 0.0)
+        max_delta = max(max_delta, abs(delta))
+        if status in {"drift", "triggered"}:
+            drift += 1
+        else:
+            stable += 1
+        if latest is None:
+            latest = {
+                "ts": row["ts"],
+                "status": row["status"],
+                "delta": delta,
+                "long_mean": row["long_mean"],
+                "short_mean": row["short_mean"],
+                "sample_count": row["sample_count"],
+                "source": row["source"],
+            }
+    return {
+        "count": int(len(rows)),
+        "drift_count": int(drift),
+        "stable_count": int(stable),
+        "drift_rate": (float(drift) / float(len(rows))) if rows else 0.0,
+        "max_abs_delta": round(float(max_delta), 6),
+        "latest": latest,
+    }

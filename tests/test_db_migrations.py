@@ -14,7 +14,7 @@ def test_schema_migrations_and_indexes_are_applied(tmp_path: Path) -> None:
             "SELECT version, name FROM schema_migrations ORDER BY version DESC LIMIT 1"
         ).fetchone()
         assert row is not None
-        assert int(row["version"]) >= 3
+        assert int(row["version"]) >= 4
         assert str(row["name"]).strip()
 
         index_names: set[str] = set()
@@ -50,6 +50,11 @@ def test_schema_migrations_and_indexes_are_applied(tmp_path: Path) -> None:
             for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
         }
         assert {"episodes", "episode_events", "episode_outcomes", "decision_features"}.issubset(table_names)
+        model_shadow_cols = {
+            str(row["name"])
+            for row in conn.execute("PRAGMA table_info(model_shadow_metrics)").fetchall()
+        }
+        assert "source" in model_shadow_cols
     finally:
         conn.close()
 
@@ -113,6 +118,7 @@ def test_connect_db_upgrades_legacy_db_with_episode_tables(tmp_path: Path) -> No
         versions = {int(row["version"]) for row in rows}
         assert 2 in versions
         assert 3 in versions
+        assert 4 in versions
         table_names = {
             str(row["name"])
             for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()

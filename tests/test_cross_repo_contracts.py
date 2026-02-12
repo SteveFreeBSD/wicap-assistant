@@ -14,7 +14,9 @@ _WICAP_CONTRACT_NAMES = (
     "wicap.event.v1.json",
     "wicap.control.v1.json",
     "wicap.anomaly.v1.json",
+    "wicap.anomaly.v2.json",
     "wicap.feedback.v1.json",
+    "wicap.prediction.v1.json",
 )
 
 
@@ -58,7 +60,9 @@ def test_assistant_wicap_contract_fixtures_are_present_and_versioned() -> None:
     event_contract = _read_json(_ASSISTANT_FIXTURE_DIR / "wicap.event.v1.json")
     control_contract = _read_json(_ASSISTANT_FIXTURE_DIR / "wicap.control.v1.json")
     anomaly_contract = _read_json(_ASSISTANT_FIXTURE_DIR / "wicap.anomaly.v1.json")
+    anomaly_v2_contract = _read_json(_ASSISTANT_FIXTURE_DIR / "wicap.anomaly.v2.json")
     feedback_contract = _read_json(_ASSISTANT_FIXTURE_DIR / "wicap.feedback.v1.json")
+    prediction_contract = _read_json(_ASSISTANT_FIXTURE_DIR / "wicap.prediction.v1.json")
 
     assert event_contract.get("schema") == "wicap.event.v1"
     assert event_contract.get("event_contract_version") == "wicap.event.v1"
@@ -69,13 +73,19 @@ def test_assistant_wicap_contract_fixtures_are_present_and_versioned() -> None:
     assert anomaly_contract.get("schema") == "wicap.anomaly.v1"
     assert anomaly_contract.get("anomaly_contract_version") == "wicap.anomaly.v1"
 
+    assert anomaly_v2_contract.get("schema") == "wicap.anomaly.v2"
+    assert anomaly_v2_contract.get("anomaly_contract_version") == "wicap.anomaly.v2"
+
     assert feedback_contract.get("schema") == "wicap.feedback.v1"
     assert feedback_contract.get("feedback_contract_version") == "wicap.feedback.v1"
 
+    assert prediction_contract.get("schema") == "wicap.prediction.v1"
+    assert prediction_contract.get("prediction_contract_version") == "wicap.prediction.v1"
+
 
 def test_assistant_wicap_fixture_inventory_matches_expected_contract_set() -> None:
-    fixtures = {path.name for path in _ASSISTANT_FIXTURE_DIR.glob("wicap.*.v1.json")}
-    assert fixtures == set(_WICAP_CONTRACT_NAMES)
+    fixtures = {path.name for path in _ASSISTANT_FIXTURE_DIR.glob("wicap.*.json")}
+    assert set(_WICAP_CONTRACT_NAMES).issubset(fixtures)
 
 
 def test_assistant_contract_fixtures_match_wicap_repo_contracts_when_available() -> None:

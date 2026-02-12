@@ -55,6 +55,22 @@ Canonical chain: `ASSISTANT_MISSION.md` -> `ASSISTANT_ROADMAP.md` -> this file
   - guardian alerts now include per-route feedback calibration context for operator review.
 - Remaining: per-deployment threshold tuning and site-specific anomaly-class calibration.
 
+## 0.1 Next-Gen Execution Track (WS-01 .. WS-14)
+- WS-01 Policy Explain Surface: Implemented baseline (`agent explain-policy`, control-plane explain fields in WiCAP control-intent/status paths).
+- WS-02 Deterministic Failover Profiles: Implemented baseline deterministic ladders/cooldowns/rollback ceilings; profile tuning remains deployment-specific.
+- WS-03 Sidecar Intel Worker: Implemented compose/profile + worker scaffold (`intel-worker`) with fail-open artifact generation.
+- WS-04 Multi-Detector Shadow Scoring: Implemented additive anomaly-v2 score fields (`primary_score`, `shadow_scores`, `model_votes`, `vote_agreement`, `score_components`).
+- WS-05 Drift + Calibration Loop v2: Implemented drift-state emission + assistant drift ingest/store/guidance surfaces.
+- WS-06 Prediction Contract + Forecast Engine: Implemented `wicap.prediction.v1` contract + assistant forecast surfaces.
+- WS-07 Proactive Action Planner: Implemented additive proactive-outcome persistence path in control loops; policy expansion remains gated.
+- WS-08 Mission Graph Runtime: Existing deterministic phase/state machine remains canonical; explicit graph decomposition remains future hardening work.
+- WS-09 Canonical OTLP Exporter Upgrade: Implemented canonical logs/metrics/traces transport with retry/backoff/partial-success parsing and fail-open behavior.
+- WS-10 Local Observability Stack: Implemented local observability compose profile baseline (collector + jaeger) with profile-gated startup.
+- WS-11 Command Center UX Upgrade: Implemented control-center snapshot surface (`agent control-center`) with policy/forecast/drift/live panes.
+- WS-12 Aggressive Autonomy Gates: Implemented rollout gate extension with proactive safety metrics and promotion history evaluation.
+- WS-13 Chaos + Replay Certification: replay/chaos harnesses remain active roadmap items for promotion certification.
+- WS-14 Governance + Docs Sync: implemented canonical docs updates for roadmap/workslice surfaces and command references.
+
 ## 1. Program Goal
 Build a WiCAP-native autonomous control agent with durable memory, adaptive learning, network anomaly intelligence, and secure cloud telemetry without breaking deterministic safety guarantees.
 

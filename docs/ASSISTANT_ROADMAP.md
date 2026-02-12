@@ -81,6 +81,14 @@
 - Implemented optional WiCAP OpenTelemetry Collector compose profile baseline.
 - Implemented WiCAP fail-open OTLP exporter queueing/backoff so telemetry delivery never destabilizes capture/control paths.
 - Implemented assistant OTLP endpoint/auth profile validation and fail-open HTTP export hooks.
+- Implemented assistant canonical OTLP signal transport (`logs/metrics/traces`) with endpoint derivation, batch splitting, retry/backoff, optional gzip, and partial-success parsing.
+
+## Phase 13 – Next-Gen Agentic Intelligence (In Progress)
+- Implemented `wicap.anomaly.v2` and `wicap.prediction.v1` cross-repo contract fixtures/parity checks.
+- Implemented assistant ingestion + storage for forecast, drift, model-shadow, and proactive-outcome artifacts.
+- Implemented policy explainability snapshot surfaces (`agent explain-policy`) and policy snapshot persistence in live/soak session metadata.
+- Implemented command-center and forecast CLI surfaces (`agent control-center`, `agent forecast`) for operator-grade runtime context.
+- Implemented sidecar-intel readiness hooks in status surfaces and contract fixtures for additive rollout-gated adoption.
 
 ## Active Program Plan
 - Detailed cross-repo milestones and work slices live in:

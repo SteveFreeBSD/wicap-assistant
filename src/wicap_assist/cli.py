@@ -26,6 +26,11 @@ from wicap_assist.confidence_audit import (
     format_confidence_audit_text,
     run_confidence_audit,
 )
+from wicap_assist.control_center import (
+    build_control_center_snapshot,
+    control_center_to_json,
+    format_control_center_text,
+)
 from wicap_assist.db import (
     DEFAULT_DB_PATH,
     connect_db,
@@ -40,6 +45,11 @@ from wicap_assist.fix_lineage import (
     fix_lineage_to_json,
     format_fix_lineage_text,
     resolve_fix_lineage,
+)
+from wicap_assist.forecast import (
+    forecast_to_json,
+    format_forecast_text,
+    summarize_forecasts,
 )
 from wicap_assist.ingest.codex_jsonl import parse_codex_file, scan_codex_paths, source_kind_for
 from wicap_assist.ingest.harness_scripts import ingest_harness_scripts
@@ -57,6 +67,11 @@ from wicap_assist.live import run_live_monitor
 from wicap_assist.memory_maintenance import run_memory_maintenance, write_memory_maintenance_report
 from wicap_assist.guardian import run_guardian
 from wicap_assist.playbooks import generate_playbooks
+from wicap_assist.policy_explain import (
+    collect_policy_explain,
+    format_policy_explain_text,
+    policy_explain_to_json,
+)
 from wicap_assist.recommend import build_recommendation, recommendation_to_json
 from wicap_assist.rollout_gates import evaluate_rollout_gates
 from wicap_assist.rollout_gates import (
@@ -631,6 +646,60 @@ def _run_agent(
         conn.close()
 
 
+def _run_agent_explain_policy(*, as_json: bool) -> int:
+    payload = collect_policy_explain(repo_root=wicap_repo_root())
+    if as_json:
+        print(policy_explain_to_json(payload))
+    else:
+        print(format_policy_explain_text(payload))
+    return 0
+
+
+def _run_agent_forecast(
+    db_path: Path,
+    *,
+    lookback_hours: int,
+    as_json: bool,
+) -> int:
+    conn = connect_db(db_path)
+    try:
+        payload = summarize_forecasts(
+            conn,
+            lookback_hours=max(1, int(lookback_hours)),
+        )
+    finally:
+        conn.close()
+    if as_json:
+        print(forecast_to_json(payload))
+    else:
+        print(format_forecast_text(payload))
+    return 0
+
+
+def _run_agent_control_center(
+    db_path: Path,
+    *,
+    control_mode: str,
+    lookback_hours: int,
+    as_json: bool,
+) -> int:
+    conn = connect_db(db_path)
+    try:
+        payload = build_control_center_snapshot(
+            conn,
+            mode=str(control_mode),
+            repo_root=wicap_repo_root(),
+            forecast_lookback_hours=max(1, int(lookback_hours)),
+        )
+    finally:
+        conn.close()
+    if as_json:
+        print(control_center_to_json(payload))
+    else:
+        print(format_control_center_text(payload))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build CLI parser."""
     parser = argparse.ArgumentParser(prog="wicap-assist")
@@ -837,6 +906,9 @@ def build_parser() -> argparse.ArgumentParser:
     rollout_parser.add_argument("--max-autonomous-escalation-rate", type=float, default=0.20)
     rollout_parser.add_argument("--min-autonomous-runs", type=int, default=5)
     rollout_parser.add_argument("--max-rollback-failures", type=int, default=3)
+    rollout_parser.add_argument("--min-proactive-samples", type=int, default=0)
+    rollout_parser.add_argument("--min-proactive-success-rate", type=float, default=0.0)
+    rollout_parser.add_argument("--max-proactive-relapse-rate", type=float, default=1.0)
     rollout_parser.add_argument(
         "--history-file",
         type=Path,
@@ -992,6 +1064,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     agent_parser = subparsers.add_parser("agent", help="Interactive live control agent console")
     agent_parser.add_argument(
+        "agent_subcommand",
+        nargs="?",
+        choices=("console", "explain-policy", "forecast", "control-center"),
+        default="console",
+        help="Agent surface: console (default), explain-policy, forecast, or control-center",
+    )
+    agent_parser.add_argument(
         "--control-mode",
         choices=("monitor", "observe", "assist", "autonomous"),
         default="observe",
@@ -1002,6 +1081,18 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=10.0,
         help="Default observation interval used for soak requests in the console",
+    )
+    agent_parser.add_argument(
+        "--lookback-hours",
+        type=int,
+        default=6,
+        help="Lookback window for agent forecast/control-center summaries",
+    )
+    agent_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="as_json",
+        help="Emit JSON for explain-policy/forecast/control-center surfaces",
     )
 
     return parser
@@ -1308,6 +1399,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 max_autonomous_escalation_rate=float(args.max_autonomous_escalation_rate),
                 min_autonomous_runs=max(1, int(args.min_autonomous_runs)),
                 max_rollback_failures=max(0, int(args.max_rollback_failures)),
+                min_proactive_samples=max(0, int(args.min_proactive_samples)),
+                min_proactive_success_rate=float(args.min_proactive_success_rate),
+                max_proactive_relapse_rate=float(args.max_proactive_relapse_rate),
             )
         finally:
             conn.close()
@@ -1420,11 +1514,31 @@ def main(argv: Sequence[str] | None = None) -> int:
             conn.close()
 
     if args.command == "agent":
-        return _run_agent(
-            db_path,
-            control_mode=_normalize_control_mode(str(args.control_mode)),
-            observe_interval_seconds=max(0.1, float(args.observe_interval_seconds)),
-        )
+        subcommand = str(getattr(args, "agent_subcommand", "console") or "console").strip().lower()
+        normalized_mode = _normalize_control_mode(str(args.control_mode))
+        if subcommand == "console":
+            return _run_agent(
+                db_path,
+                control_mode=normalized_mode,
+                observe_interval_seconds=max(0.1, float(args.observe_interval_seconds)),
+            )
+        if subcommand == "explain-policy":
+            return _run_agent_explain_policy(as_json=bool(args.as_json))
+        if subcommand == "forecast":
+            return _run_agent_forecast(
+                db_path,
+                lookback_hours=max(1, int(args.lookback_hours)),
+                as_json=bool(args.as_json),
+            )
+        if subcommand == "control-center":
+            return _run_agent_control_center(
+                db_path,
+                control_mode=normalized_mode,
+                lookback_hours=max(1, int(args.lookback_hours)),
+                as_json=bool(args.as_json),
+            )
+        parser.error(f"Unknown agent subcommand: {subcommand}")
+        return 2
 
     parser.error("Unknown command")
     return 2

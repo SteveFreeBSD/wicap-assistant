@@ -18,12 +18,14 @@ from wicap_assist.bundle import build_bundle
 from wicap_assist.config import wicap_repo_root
 from wicap_assist.db import (
     close_running_control_sessions,
-    insert_decision_feature,
     insert_control_episode,
     insert_control_event,
     insert_control_session,
     insert_control_session_event,
+    insert_decision_feature,
     insert_live_observation,
+    insert_model_shadow_metric,
+    insert_proactive_action_outcome,
     insert_soak_run,
     update_control_session,
 )
@@ -31,6 +33,7 @@ from wicap_assist.decision_features import build_decision_feature_vector, query_
 from wicap_assist.incident import write_incident_report
 from wicap_assist.ingest.soak_logs import ingest_soak_logs
 from wicap_assist.live import collect_live_cycle
+from wicap_assist.policy_explain import collect_policy_explain
 from wicap_assist.soak_control import ControlPolicy
 from wicap_assist.soak_manager import (
     build_manager_actions,
@@ -63,6 +66,20 @@ def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
         (name,),
     ).fetchone()
     return row is not None
+
+
+def _safe_float(value: object) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _safe_int(value: object) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def resolve_runner_path(
@@ -324,6 +341,7 @@ def run_supervised_soak(
         if str(control_mode) in {"assist", "autonomous"}
         else "observe"
     )
+    policy_snapshot = collect_policy_explain(repo_root=resolved_repo_root, runner=control_runner)
 
     def emit_progress(payload: dict[str, Any]) -> None:
         if progress_hook is None:
@@ -365,6 +383,66 @@ def run_supervised_soak(
                 last_heartbeat_ts=str(event["ts"]),
             )
         emit_progress({"event": "phase", **event})
+
+    def persist_shadow_ranker(ts: str, shadow_ranker: dict[str, Any]) -> None:
+        rankings = shadow_ranker.get("rankings", []) if isinstance(shadow_ranker, dict) else []
+        gate_payload = shadow_ranker.get("shadow_gate", {}) if isinstance(shadow_ranker, dict) else {}
+        agreement = _safe_float(gate_payload.get("agreement_rate")) if isinstance(gate_payload, dict) else None
+        top_action = str(shadow_ranker.get("top_action", "")).strip() if isinstance(shadow_ranker, dict) else ""
+        if not isinstance(rankings, list):
+            return
+        for rank in rankings[:3]:
+            if not isinstance(rank, dict):
+                continue
+            action = str(rank.get("action", "")).strip()
+            if not action:
+                continue
+            insert_model_shadow_metric(
+                conn,
+                ts=str(ts),
+                source="soak_run",
+                decision="shadow_ranker",
+                action=action,
+                model_id=f"shadow_ranker:{action}",
+                score=_safe_float(rank.get("score")),
+                vote=bool(action == top_action),
+                agreement=agreement,
+                payload_json={
+                    "mode": str(control_mode),
+                    "policy_profile": resolved_profile_name,
+                    "rank": rank,
+                    "shadow_gate": gate_payload if isinstance(gate_payload, dict) else {},
+                },
+            )
+
+    def persist_proactive_outcome(
+        *,
+        ts: str,
+        decision: str,
+        action: str | None,
+        status: str,
+        detail_payload: dict[str, Any],
+    ) -> None:
+        reasoning_class = str(detail_payload.get("reasoning_class", "")).strip().lower()
+        if not action:
+            return
+        if not (
+            reasoning_class == "forecast_preemption"
+            or decision.startswith("anomaly_")
+            or "forecast" in decision
+        ):
+            return
+        insert_proactive_action_outcome(
+            conn,
+            ts=str(ts),
+            control_session_id=int(control_session_id) if control_session_id is not None else None,
+            action=str(action),
+            decision=str(decision),
+            status=str(status),
+            trigger_risk_score=_safe_float(detail_payload.get("risk_score")),
+            horizon_sec=_safe_int(detail_payload.get("horizon_sec")),
+            payload_json=detail_payload,
+        )
 
     run_stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     run_dir = run_root / run_stamp
@@ -464,6 +542,7 @@ def run_supervised_soak(
                 "session_ids": learned_runbook.session_ids,
             },
             "working_memory": working_memory_state,
+            "policy_explain": policy_snapshot,
         }
 
     before_dirs = {str(path.resolve()) for path in _scan_soak_dirs(resolved_repo_root)}
@@ -501,6 +580,7 @@ def run_supervised_soak(
             "post_run_cleanup": bool(post_run_cleanup),
             "interrupted_sessions_closed": int(interrupted_sessions),
             "working_memory": working_memory_state,
+            "policy_explain": policy_snapshot,
         },
     )
     insert_control_session_event(
@@ -681,6 +761,10 @@ def run_supervised_soak(
                         policy_profile=resolved_profile_name,
                         top_n=3,
                     )
+                    persist_shadow_ranker(
+                        ts=str(observation.get("ts", utc_now_iso())),
+                        shadow_ranker=shadow_ranker,
+                    )
                     cycle_actions_executed = 0
                     for event in cycle_control_events:
                         if isinstance(event, dict):
@@ -714,6 +798,13 @@ def run_supervised_soak(
                             detail = {}
                         detail["shadow_ranker"] = shadow_ranker
                         event["detail_json"] = detail
+                        persist_proactive_outcome(
+                            ts=str(event.get("ts", utc_now_iso())),
+                            decision=str(event.get("decision", "")),
+                            action=(str(event.get("action")) if event.get("action") is not None else None),
+                            status=status,
+                            detail_payload=detail,
+                        )
                         service = detail.get("service") if isinstance(detail, dict) else None
                         emit_progress(
                             {
@@ -746,7 +837,10 @@ def run_supervised_soak(
                         update_control_session(
                             conn,
                             control_session_id=int(control_session_id),
-                            metadata_json={"working_memory": working_memory_state},
+                            metadata_json={
+                                "working_memory": working_memory_state,
+                                "policy_explain": policy_snapshot,
+                            },
                         )
                     emit_progress(
                         {
@@ -833,6 +927,7 @@ def run_supervised_soak(
                                     metadata_json={
                                         "escalation_reason": escalation_reason,
                                         "working_memory": working_memory_state,
+                                        "policy_explain": policy_snapshot,
                                     },
                                 )
                                 insert_control_session_event(
@@ -909,6 +1004,10 @@ def run_supervised_soak(
                 policy_profile=resolved_profile_name,
                 top_n=3,
             )
+            persist_shadow_ranker(
+                ts=str(observation.get("ts", utc_now_iso())),
+                shadow_ranker=shadow_ranker,
+            )
             cycle_actions_executed = 0
             for event in cycle_control_events:
                 if isinstance(event, dict):
@@ -942,6 +1041,13 @@ def run_supervised_soak(
                     detail = {}
                 detail["shadow_ranker"] = shadow_ranker
                 event["detail_json"] = detail
+                persist_proactive_outcome(
+                    ts=str(event.get("ts", utc_now_iso())),
+                    decision=str(event.get("decision", "")),
+                    action=(str(event.get("action")) if event.get("action") is not None else None),
+                    status=status,
+                    detail_payload=detail,
+                )
                 service = detail.get("service") if isinstance(detail, dict) else None
                 emit_progress(
                     {
@@ -973,7 +1079,10 @@ def run_supervised_soak(
                 update_control_session(
                     conn,
                     control_session_id=int(control_session_id),
-                    metadata_json={"working_memory": working_memory_state},
+                    metadata_json={
+                        "working_memory": working_memory_state,
+                        "policy_explain": policy_snapshot,
+                    },
                 )
             if isinstance(top_signatures, list):
                 for item in top_signatures:
@@ -1163,6 +1272,7 @@ def run_supervised_soak(
             "manager_actions": manager_actions_for_store,
             "operator_guidance": operator_guidance_for_store,
             "working_memory": working_memory_state,
+            "policy_explain": policy_snapshot,
         },
         run_dir=str(run_dir),
         newest_soak_dir=str(newest) if newest is not None else None,
@@ -1254,6 +1364,7 @@ def run_supervised_soak(
                 "control_rollback_actions": resolved_rollback_actions,
                 "control_rollback_max_attempts": int(control_policy.rollback_max_attempts or 1),
                 "working_memory": working_memory_state,
+                "policy_explain": policy_snapshot,
             },
         )
         insert_control_session_event(
@@ -1361,6 +1472,7 @@ def run_supervised_soak(
         "manager_actions": manager_actions,
         "operator_guidance": operator_guidance,
         "working_memory": working_memory_state,
+        "policy_explain": policy_snapshot,
         "observation_cycles": int(observation_cycles),
         "alert_cycles": int(alert_cycles),
         "down_service_cycles": int(down_service_cycles),

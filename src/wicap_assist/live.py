@@ -15,12 +15,14 @@ from typing import Any
 from wicap_assist.config import wicap_repo_root
 from wicap_assist.db import (
     close_running_control_sessions,
-    insert_decision_feature,
     insert_control_episode,
     insert_control_event,
     insert_control_session,
     insert_control_session_event,
+    insert_decision_feature,
     insert_live_observation,
+    insert_model_shadow_metric,
+    insert_proactive_action_outcome,
     update_control_session,
 )
 from wicap_assist.action_ranker import rank_allowlisted_actions
@@ -35,6 +37,7 @@ from wicap_assist.guardian import (
 from wicap_assist.known_issues import match_known_issue
 from wicap_assist.playbooks import default_playbooks_dir
 from wicap_assist.probes import probe_docker, probe_http_health, probe_network
+from wicap_assist.policy_explain import collect_policy_explain
 from wicap_assist.recommend import build_recommendation
 from wicap_assist.soak_control import ControlPolicy
 from wicap_assist.soak_manager import build_operator_guidance
@@ -81,6 +84,20 @@ def _parse_iso_utc(value: object) -> datetime | None:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)
+
+
+def _safe_float(value: object) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _safe_int(value: object) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _metadata_repo_root(raw_meta: object) -> str | None:
@@ -566,6 +583,7 @@ def run_live_monitor(
     resolved_kill_switch_env = str(policy.kill_switch_env_var or "")
     resolved_kill_switch_file = str(policy.kill_switch_file) if policy.kill_switch_file is not None else None
     resolved_rollback_actions = list(policy.rollback_actions or ())
+    policy_snapshot = collect_policy_explain(repo_root=active_repo_root, runner=control_runner)
     started_ts = _utc_now_iso()
     now_dt = _parse_iso_utc(started_ts) or datetime.now(timezone.utc)
     max_resume_age = max(30, int(resume_window_seconds))
@@ -664,6 +682,7 @@ def run_live_monitor(
                 "resume_window_seconds": int(max_resume_age),
                 "interrupted_sessions_closed": int(interrupted_sessions),
                 "working_memory": working_memory_state,
+                "policy_explain": policy_snapshot,
             },
         )
         insert_control_session_event(
@@ -711,6 +730,7 @@ def run_live_monitor(
                 "resume_window_seconds": int(max_resume_age),
                 "interrupted_sessions_closed": int(interrupted_sessions),
                 "working_memory": working_memory_state,
+                "policy_explain": policy_snapshot,
             },
         )
         insert_control_session_event(
@@ -750,6 +770,36 @@ def run_live_monitor(
                 policy_profile=resolved_profile_name,
                 top_n=3,
             )
+            ranking_rows = shadow_ranker.get("rankings", []) if isinstance(shadow_ranker, dict) else []
+            gate_payload = shadow_ranker.get("shadow_gate", {}) if isinstance(shadow_ranker, dict) else {}
+            agreement_rate = (
+                _safe_float(gate_payload.get("agreement_rate")) if isinstance(gate_payload, dict) else None
+            )
+            top_action = str(shadow_ranker.get("top_action", "")).strip() if isinstance(shadow_ranker, dict) else ""
+            if isinstance(ranking_rows, list):
+                for rank in ranking_rows[:3]:
+                    if not isinstance(rank, dict):
+                        continue
+                    candidate_action = str(rank.get("action", "")).strip()
+                    if not candidate_action:
+                        continue
+                    insert_model_shadow_metric(
+                        conn,
+                        ts=str(observation.get("ts", _utc_now_iso())),
+                        source="live_monitor",
+                        decision="shadow_ranker",
+                        action=candidate_action,
+                        model_id=f"shadow_ranker:{candidate_action}",
+                        score=_safe_float(rank.get("score")),
+                        vote=bool(candidate_action == top_action),
+                        agreement=agreement_rate,
+                        payload_json={
+                            "mode": str(control_mode),
+                            "policy_profile": resolved_profile_name,
+                            "rank": rank,
+                            "shadow_gate": gate_payload if isinstance(gate_payload, dict) else {},
+                        },
+                    )
             cycle_actions_executed = 0
             for event in cycle_control_events:
                 total_control_events += 1
@@ -825,6 +875,23 @@ def run_live_monitor(
                     status=status,
                     detail_json=detail_payload,
                 )
+                reasoning_class = str(detail_payload.get("reasoning_class", "")).strip().lower()
+                if action and (
+                    reasoning_class == "forecast_preemption"
+                    or decision.startswith("anomaly_")
+                    or "forecast" in decision
+                ):
+                    insert_proactive_action_outcome(
+                        conn,
+                        ts=ts,
+                        control_session_id=int(control_session_id),
+                        action=action,
+                        decision=decision,
+                        status=status,
+                        trigger_risk_score=_safe_float(detail_payload.get("risk_score")),
+                        horizon_sec=_safe_int(detail_payload.get("horizon_sec")),
+                        payload_json=detail_payload,
+                    )
 
             working_memory_state = update_working_memory(
                 working_memory_state,
@@ -891,6 +958,7 @@ def run_live_monitor(
                     "observations": int(total_observations),
                     "control_events": int(total_control_events),
                     "working_memory": working_memory_state,
+                    "policy_explain": policy_snapshot,
                 },
             )
             conn.commit()
@@ -953,6 +1021,7 @@ def run_live_monitor(
                 "control_rollback_enabled": bool(policy.rollback_enabled),
                 "control_rollback_actions": resolved_rollback_actions,
                 "control_rollback_max_attempts": int(policy.rollback_max_attempts or 1),
+                "policy_explain": policy_snapshot,
             },
         )
         insert_control_session_event(

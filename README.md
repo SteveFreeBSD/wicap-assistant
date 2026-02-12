@@ -117,6 +117,15 @@ Interactive agent console:
 ```bash
 wicap-assist agent --control-mode assist
 ```
+Policy explain snapshot:
+```bash
+wicap-assist agent explain-policy --json
+```
+Forecast + control-center snapshots:
+```bash
+wicap-assist agent forecast --lookback-hours 6
+wicap-assist agent control-center --control-mode assist
+```
 The console supports prompts like:
 - `status` or `stats` (command-center snapshot with control/memory metrics)
 - `mode assist` / `mode autonomous`
@@ -230,10 +239,10 @@ Data is stored in `./data/assistant.db`.
 - `wicap-assist fix-lineage "<signature>" [--json]`
 - `wicap-assist confidence-audit [--limit N] [--json]`
 - `wicap-assist memory-maintenance [--lookback-days N] [--stale-days N] [--max-decision-rows N] [--max-session-rows N] [--prune-stale] [--output <file>] [--json]`
-- `wicap-assist rollout-gates [--lookback-days N] [--min-shadow-samples N] [--min-shadow-agreement-rate F] [--min-shadow-success-rate F] [--min-reward-avg F] [--max-autonomous-escalation-rate F] [--min-autonomous-runs N] [--max-rollback-failures N] [--history-file <file>] [--required-consecutive-passes N] [--enforce] [--json]`
+- `wicap-assist rollout-gates [--lookback-days N] [--min-shadow-samples N] [--min-shadow-agreement-rate F] [--min-shadow-success-rate F] [--min-reward-avg F] [--max-autonomous-escalation-rate F] [--min-autonomous-runs N] [--max-rollback-failures N] [--min-proactive-samples N] [--min-proactive-success-rate F] [--max-proactive-relapse-rate F] [--history-file <file>] [--required-consecutive-passes N] [--enforce] [--json]`
 - `wicap-assist soak-run [--duration-minutes N] [--playwright-interval-minutes N] [--baseline-path <file>] [--baseline-update|--no-baseline-update] [--observe-interval-seconds N] [--control-mode monitor|observe|assist|autonomous] [--control-check-threshold N] [--control-recover-threshold N] [--control-max-recover-attempts N] [--control-action-cooldown-cycles N] [--require-runtime-contract|--no-require-runtime-contract] [--runtime-contract-path <file>] [--stop-on-escalation|--no-stop-on-escalation] [--dry-run]`
 - `wicap-assist live [--interval N] [--once] [--control-mode monitor|observe|assist|autonomous] [--control-check-threshold N] [--control-recover-threshold N] [--control-max-recover-attempts N] [--control-action-cooldown-cycles N] [--stop-on-escalation]`
-- `wicap-assist agent [--control-mode monitor|observe|assist|autonomous] [--observe-interval-seconds N]`
+- `wicap-assist agent [console|explain-policy|forecast|control-center] [--control-mode monitor|observe|assist|autonomous] [--observe-interval-seconds N] [--lookback-hours N] [--json]`
 
 ## Calibration Rules
 - Confidence is hard-capped below `0.95` unless strict criteria are met.

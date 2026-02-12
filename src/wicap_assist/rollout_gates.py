@@ -49,6 +49,9 @@ def evaluate_rollout_gates(
     max_autonomous_escalation_rate: float = 0.20,
     min_autonomous_runs: int = 5,
     max_rollback_failures: int = 3,
+    min_proactive_samples: int = 0,
+    min_proactive_success_rate: float = 0.0,
+    max_proactive_relapse_rate: float = 1.0,
     now_ts: str | None = None,
 ) -> dict[str, Any]:
     now_text = str(now_ts or utc_now_iso())
@@ -151,6 +154,54 @@ def evaluate_rollout_gates(
             rollback_failures += 1
     rollback_pass = rollback_failures <= int(max_rollback_failures)
 
+    proactive_rows = conn.execute(
+        """
+        SELECT ts, status
+        FROM proactive_action_outcomes
+        ORDER BY id DESC
+        LIMIT 5000
+        """
+    ).fetchall()
+    proactive_samples = 0
+    proactive_success = 0
+    proactive_fail = 0
+    proactive_relapse = 0
+    for row in proactive_rows:
+        ts_dt = parse_utc_datetime(row["ts"])
+        if ts_dt is None or ts_dt < cutoff:
+            continue
+        proactive_samples += 1
+        status = str(row["status"] or "").strip().lower()
+        if status in {"executed_ok", "stable", "completed", "pass"}:
+            proactive_success += 1
+        elif status in {"relapse"}:
+            proactive_relapse += 1
+        elif status in {"executed_fail", "escalated", "rejected", "missing_script", "failed"}:
+            proactive_fail += 1
+    proactive_success_denom = proactive_success + proactive_fail
+    proactive_success_rate = (
+        float(proactive_success) / float(proactive_success_denom)
+        if proactive_success_denom > 0
+        else 0.0
+    )
+    proactive_relapse_rate = (
+        float(proactive_relapse) / float(proactive_samples)
+        if proactive_samples > 0
+        else 0.0
+    )
+    proactive_pass = (
+        proactive_samples >= int(min_proactive_samples)
+        and proactive_success_rate >= float(min_proactive_success_rate)
+        and proactive_relapse_rate <= float(max_proactive_relapse_rate)
+    )
+    proactive_status = (
+        "pass"
+        if proactive_pass
+        else "insufficient_data"
+        if proactive_samples < int(min_proactive_samples)
+        else "fail"
+    )
+
     gates = {
         "shadow_quality": {
             "status": shadow_status,
@@ -183,6 +234,19 @@ def evaluate_rollout_gates(
             "pass": bool(rollback_pass),
             "rollback_failures": int(rollback_failures),
             "max_rollback_failures": int(max_rollback_failures),
+        },
+        "proactive_safety": {
+            "status": proactive_status,
+            "pass": bool(proactive_pass),
+            "sample_count": int(proactive_samples),
+            "success_count": int(proactive_success),
+            "fail_count": int(proactive_fail),
+            "relapse_count": int(proactive_relapse),
+            "success_rate": round(float(proactive_success_rate), 4),
+            "relapse_rate": round(float(proactive_relapse_rate), 4),
+            "min_samples": int(min_proactive_samples),
+            "min_success_rate": float(min_proactive_success_rate),
+            "max_relapse_rate": float(max_proactive_relapse_rate),
         },
     }
     overall_pass = all(bool(item.get("pass")) for item in gates.values())

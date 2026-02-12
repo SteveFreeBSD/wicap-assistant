@@ -64,16 +64,23 @@ def test_emit_control_cycle_telemetry_persists_redacted_payload(tmp_path: Path) 
 
 def test_emit_control_cycle_telemetry_posts_to_otlp_when_profile_valid(tmp_path: Path) -> None:
     sink = tmp_path / "telemetry.jsonl"
-    seen: dict[str, object] = {}
+    seen: list[dict[str, object]] = []
 
     class _Response:
         status = 200
 
+        def read(self) -> bytes:
+            return b"{}"
+
     def fake_sender(request, timeout):  # type: ignore[no-untyped-def]
-        seen["url"] = request.full_url
-        seen["timeout"] = timeout
-        seen["headers"] = dict(request.header_items())
-        seen["body"] = request.data.decode("utf-8")
+        seen.append(
+            {
+                "url": request.full_url,
+                "timeout": timeout,
+                "headers": dict(request.header_items()),
+                "body": request.data.decode("utf-8"),
+            }
+        )
         return _Response()
 
     profile = OtlpProfile(
@@ -97,15 +104,20 @@ def test_emit_control_cycle_telemetry_posts_to_otlp_when_profile_valid(tmp_path:
         otlp_profile=profile,
         otlp_sender=fake_sender,
     )
-    assert seen["url"] == "http://localhost:4318/v1/logs"
-    assert float(seen["timeout"]) == 2.0
-    lowered_headers = {str(key).lower(): value for key, value in dict(seen["headers"]).items()}
-    assert "content-type" in lowered_headers
-    assert '"telemetry_event_version": "wicap.telemetry.v1"' in str(seen["body"])
+    urls = {str(item["url"]) for item in seen}
+    assert "http://localhost:4318/v1/logs" in urls
+    assert "http://localhost:4318/v1/metrics" in urls
+    assert "http://localhost:4318/v1/traces" in urls
+    assert all(float(item["timeout"]) == 2.0 for item in seen)
+    assert any("resourceLogs" in str(item["body"]) for item in seen)
+    assert any("resourceMetrics" in str(item["body"]) for item in seen)
+    assert any("resourceSpans" in str(item["body"]) for item in seen)
 
 
-def test_emit_control_cycle_telemetry_otlp_failure_is_fail_open(tmp_path: Path) -> None:
+def test_emit_control_cycle_telemetry_otlp_failure_is_fail_open(tmp_path: Path, monkeypatch) -> None:
     sink = tmp_path / "telemetry.jsonl"
+    monkeypatch.setenv("WICAP_ASSIST_OTLP_RETRY_BACKOFF_SECONDS", "0")
+    monkeypatch.setenv("WICAP_ASSIST_OTLP_MAX_ATTEMPTS", "2")
 
     def failing_sender(_request, timeout):  # type: ignore[no-untyped-def]
         raise OSError(f"timeout={timeout}")
