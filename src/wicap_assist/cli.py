@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from collections import defaultdict
 from pathlib import Path
 from typing import Sequence
@@ -71,7 +72,7 @@ from wicap_assist.runtime_contract import (
 from wicap_assist.rollup import format_rollup_text, generate_rollup, rollup_to_json
 from wicap_assist.soak_run import run_supervised_soak
 from wicap_assist.settings import wicap_repo_root
-from wicap_assist.wicap_env_setup import SetupAbortedError, run_wicap_env_setup
+from wicap_assist.wicap_env_setup import SetupAbortedError, run_wicap_env_setup, validate_wicap_env
 from wicap_assist.util.time import utc_now_iso
 
 
@@ -681,6 +682,39 @@ def build_parser() -> argparse.ArgumentParser:
         help="Do not create timestamped .env backup before overwriting",
     )
 
+    validate_env_parser = subparsers.add_parser(
+        "validate-wicap-env",
+        help="Validate WiCAP .env safety/readiness before runtime startup",
+    )
+    validate_env_parser.add_argument(
+        "--repo-root",
+        type=Path,
+        default=None,
+        help="Override WiCAP repo root (default: WICAP_REPO_ROOT or auto-discovered)",
+    )
+    validate_env_parser.add_argument(
+        "--env-file",
+        type=Path,
+        default=None,
+        help="Override target .env path (default: <repo-root>/.env)",
+    )
+    validate_env_parser.add_argument(
+        "--no-live-probe",
+        action="store_true",
+        help="Skip live UI TCP/internal emit probes (static config validation only)",
+    )
+    validate_env_parser.add_argument(
+        "--require-live",
+        action="store_true",
+        help="Treat live probe failures as hard errors (exit non-zero)",
+    )
+    validate_env_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="as_json",
+        help="Emit JSON validation report",
+    )
+
     triage_parser = subparsers.add_parser("triage", help="Search stored signals")
     triage_parser.add_argument("query", help="Search phrase")
     triage_parser.add_argument("--top-sessions", type=int, default=5)
@@ -1004,6 +1038,41 @@ def main(argv: Sequence[str] | None = None) -> int:
             f"dry_run={bool(report.get('dry_run', False))}"
         )
         return 0
+
+    if args.command == "validate-wicap-env":
+        try:
+            report = validate_wicap_env(
+                repo_root=args.repo_root or wicap_repo_root(),
+                env_path=args.env_file,
+                probe_live=not bool(args.no_live_probe),
+                require_live=bool(args.require_live),
+            )
+        except ValueError as exc:
+            print(f"validate-wicap-env error: {exc}")
+            return 2
+
+        if args.as_json:
+            print(json.dumps(report, sort_keys=True))
+        else:
+            print(f"Validation target: {report['env_path']}")
+            errors = list(report.get("errors", []))
+            warnings = list(report.get("warnings", []))
+            if errors:
+                print("Errors:")
+                for item in errors:
+                    print(f"- {item}")
+            if warnings:
+                print("Warnings:")
+                for item in warnings:
+                    print(f"- {item}")
+            checks = report.get("checks", {})
+            if isinstance(checks, dict) and checks:
+                print("Checks:")
+                for key in sorted(checks.keys()):
+                    print(f"- {key}: {checks[key]}")
+            if not errors:
+                print("Validation passed.")
+        return 0 if bool(report.get("ok")) else 2
 
     if args.command == "ingest":
         scan_flags = [

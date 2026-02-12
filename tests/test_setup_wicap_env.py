@@ -4,7 +4,7 @@ import re
 from pathlib import Path
 
 import wicap_assist.wicap_env_setup as setup_mod
-from wicap_assist.wicap_env_setup import load_env_entries, run_wicap_env_setup
+from wicap_assist.wicap_env_setup import load_env_entries, run_wicap_env_setup, validate_wicap_env
 
 
 def _iter_input(values: list[str], default: str = ""):
@@ -86,7 +86,7 @@ def test_setup_wicap_env_writes_deterministic_env_with_no_duplicate_keys(tmp_pat
     assert len(keys) == len(set(keys))
 
     entries = load_env_entries(repo_root / ".env")
-    assert entries["WICAP_UI_URL"] == "http://192.168.50.10:8080"
+    assert entries["WICAP_UI_URL"] == "http://127.0.0.1:8080"
     assert entries["WICAP_INTERFACE"] == "wlx001"
     assert "wlo1" in entries["WICAP_INTERFACE_EXCLUDE_REGEX"]
     assert "WICAP_SQL_DRIVER=ODBC Driver 18 for SQL Server" in env_text
@@ -271,3 +271,96 @@ def test_setup_wicap_env_dry_run_does_not_write_file(tmp_path: Path, monkeypatch
 
     assert report["dry_run"] is True
     assert not (repo_root / ".env").exists()
+
+
+def test_setup_wicap_env_normalizes_allowlist_and_keeps_loopback(tmp_path: Path, monkeypatch) -> None:
+    repo_root = _create_repo_root(tmp_path)
+    monkeypatch.setattr(setup_mod, "_detect_management_interface", lambda: "wlo1")
+    monkeypatch.setattr(setup_mod, "_discover_wireless_interfaces", lambda: ["wlo1", "wlx001"])
+    monkeypatch.setattr(setup_mod, "_detect_lan_ipv4", lambda interface: "192.168.0.50")
+    monkeypatch.setattr(setup_mod, "_list_bt_serial_candidates", lambda: [])
+
+    run_wicap_env_setup(
+        repo_root=repo_root,
+        assume_yes=True,
+        input_fn=_iter_input(
+            [
+                "",  # sql host
+                "",  # sql db
+                "",  # sql user
+                "",  # sql driver
+                "",  # trust cert
+                "",  # secret required
+                "192.168.0.0/24, 192.168.0.0/24",  # allowlist
+            ]
+        ),
+        secret_input_fn=_iter_input(["supersecure-pass-123", "internal-secret-123"]),
+        print_fn=lambda _: None,
+    )
+
+    entries = load_env_entries(repo_root / ".env")
+    assert entries["WICAP_INTERNAL_ALLOWLIST"] == "192.168.0.0/24,127.0.0.1,::1"
+
+
+def test_validate_wicap_env_flags_management_interface_capture_conflict(tmp_path: Path, monkeypatch) -> None:
+    repo_root = _create_repo_root(tmp_path)
+    env_path = repo_root / ".env"
+    env_path.write_text(
+        "\n".join(
+            [
+                "WICAP_SQL_HOST=192.168.0.10,1433",
+                "WICAP_SQL_DATABASE=WifiInsanityDB",
+                "WICAP_SQL_USER=steve_linux",
+                "WICAP_SQL_PASSWORD=supersecure-pass-123",
+                "WICAP_INTERNAL_SECRET=internal-secret-123",
+                "WICAP_REDIS_URL=redis://localhost:6380/0",
+                "WICAP_UI_URL=http://127.0.0.1:8080",
+                "WICAP_INTERFACE=wlo1",
+                "WICAP_INTERNAL_ALLOWLIST=127.0.0.1,::1",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(setup_mod, "_detect_management_interface", lambda: "wlo1")
+    monkeypatch.setattr(setup_mod, "_detect_lan_ipv4", lambda interface: "192.168.0.42")
+
+    report = validate_wicap_env(repo_root=repo_root, probe_live=False)
+
+    assert report["ok"] is False
+    errors = report["errors"]
+    assert isinstance(errors, list)
+    assert any("matches management interface" in item for item in errors)
+
+
+def test_validate_wicap_env_detects_internal_emit_auth_failure(tmp_path: Path, monkeypatch) -> None:
+    repo_root = _create_repo_root(tmp_path)
+    env_path = repo_root / ".env"
+    env_path.write_text(
+        "\n".join(
+            [
+                "WICAP_SQL_HOST=192.168.0.10,1433",
+                "WICAP_SQL_DATABASE=WifiInsanityDB",
+                "WICAP_SQL_USER=steve_linux",
+                "WICAP_SQL_PASSWORD=supersecure-pass-123",
+                "WICAP_INTERNAL_SECRET=internal-secret-123",
+                "WICAP_REDIS_URL=redis://localhost:6380/0",
+                "WICAP_UI_URL=http://127.0.0.1:8080",
+                "WICAP_INTERFACE=wlx001",
+                "WICAP_INTERNAL_ALLOWLIST=127.0.0.1,::1",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(setup_mod, "_detect_management_interface", lambda: "wlo1")
+    monkeypatch.setattr(setup_mod, "_detect_lan_ipv4", lambda interface: "192.168.0.42")
+    monkeypatch.setattr(setup_mod, "_probe_tcp_reachability", lambda host, port: (True, "ok"))
+    monkeypatch.setattr(setup_mod, "_probe_internal_emit", lambda ui_url, secret: (False, "HTTP 403"))
+
+    report = validate_wicap_env(repo_root=repo_root, probe_live=True, require_live=True)
+
+    assert report["ok"] is False
+    errors = report["errors"]
+    assert isinstance(errors, list)
+    assert any("Internal emit probe failed" in item for item in errors)

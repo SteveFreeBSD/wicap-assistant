@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import getpass
+import ipaddress
+import json
 import os
 import re
 import socket
@@ -11,6 +13,9 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Callable, Sequence
+from urllib import error as urllib_error
+from urllib import parse as urllib_parse
+from urllib import request as urllib_request
 
 _ENV_ASSIGNMENT_RE = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$")
 _BOOL_TRUE = {"1", "true", "yes", "y", "on"}
@@ -279,6 +284,140 @@ def _normalize_interface_mode(value: str) -> str:
     if token in {"auto", "automatic"}:
         return "auto"
     raise ValueError("Expected Wi-Fi capture mode: explicit or auto")
+
+
+def _split_allowlist_entries(value: str) -> list[str]:
+    seen: set[str] = set()
+    entries: list[str] = []
+    for raw_entry in str(value or "").split(","):
+        entry = raw_entry.strip()
+        if not entry or entry in seen:
+            continue
+        seen.add(entry)
+        entries.append(entry)
+    return entries
+
+
+def _normalize_allowlist(value: str) -> str:
+    entries = _split_allowlist_entries(value)
+    return ",".join(entries)
+
+
+def _parse_ip_token(value: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+    token = str(value or "").strip()
+    if not token:
+        return None
+    if "%" in token:
+        token = token.split("%", 1)[0]
+    try:
+        return ipaddress.ip_address(token)
+    except ValueError:
+        return None
+
+
+def _allowlist_entry_matches(entry: str, host: str) -> bool:
+    if not entry:
+        return False
+    if entry == host:
+        return True
+    if "/" not in entry:
+        return False
+    parsed_ip = _parse_ip_token(host)
+    if parsed_ip is None:
+        return False
+    try:
+        network = ipaddress.ip_network(entry, strict=False)
+    except ValueError:
+        return False
+    return parsed_ip in network
+
+
+def _sanitize_allowlist(
+    raw_allowlist: str,
+    *,
+    ensure_loopback: bool = True,
+) -> tuple[str, list[str]]:
+    entries = _split_allowlist_entries(raw_allowlist)
+    warnings: list[str] = []
+
+    if ensure_loopback:
+        for loopback in ("127.0.0.1", "::1"):
+            if loopback not in entries:
+                entries.append(loopback)
+                warnings.append(
+                    f"Added {loopback} to WICAP_INTERNAL_ALLOWLIST so local internal API calls remain allowed."
+                )
+
+    for entry in entries:
+        if "/" in entry:
+            try:
+                ipaddress.ip_network(entry, strict=False)
+            except ValueError:
+                warnings.append(f"WICAP_INTERNAL_ALLOWLIST entry looks like CIDR but is invalid: {entry}")
+            continue
+
+        ip_like = bool(re.fullmatch(r"[0-9A-Fa-f:.%]+", entry))
+        if ip_like and _parse_ip_token(entry) is None:
+            warnings.append(f"WICAP_INTERNAL_ALLOWLIST entry looks like an IP but is invalid: {entry}")
+
+    return ",".join(entries), warnings
+
+
+def _parse_ui_url(ui_url: str, *, default_port: int = 8080) -> tuple[str, int, str]:
+    value = str(ui_url or "").strip()
+    if not value:
+        return "", 0, "WICAP_UI_URL is empty"
+    if "://" not in value:
+        value = f"http://{value}"
+    parsed = urllib_parse.urlparse(value)
+    host = (parsed.hostname or "").strip()
+    if not host:
+        return "", 0, f"WICAP_UI_URL has no host: {ui_url}"
+    try:
+        port = int(parsed.port or default_port)
+    except ValueError:
+        return "", 0, f"WICAP_UI_URL has invalid port: {ui_url}"
+    return host, port, ""
+
+
+def _probe_internal_emit(ui_url: str, *, secret: str, timeout_seconds: float = 2.0) -> tuple[bool, str]:
+    value = str(ui_url or "").strip()
+    if not value:
+        return False, "WICAP_UI_URL missing"
+    if "://" not in value:
+        value = f"http://{value}"
+    parsed = urllib_parse.urlparse(value)
+    if not parsed.scheme or not parsed.netloc:
+        return False, f"Malformed WICAP_UI_URL: {ui_url}"
+
+    endpoint = urllib_parse.urlunparse((parsed.scheme, parsed.netloc, "/api/internal/emit", "", "", ""))
+    payload = json.dumps(
+        {
+            "event": "assistant_validation_ping",
+            "data": {"source": "wicap-assist", "ts": datetime.now(UTC).isoformat()},
+        }
+    ).encode("utf-8")
+    req = urllib_request.Request(
+        endpoint,
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    if secret:
+        req.add_header("X-WICAP-SECRET", secret)
+
+    try:
+        with urllib_request.urlopen(req, timeout=timeout_seconds) as response:
+            status = int(response.getcode() or 0)
+            if status == 200:
+                return True, "ok"
+            body = response.read(200).decode("utf-8", errors="replace")
+            return False, f"HTTP {status}: {body}"
+    except urllib_error.HTTPError as exc:
+        body = exc.read(200).decode("utf-8", errors="replace")
+        return False, f"HTTP {exc.code}: {body}"
+    except OSError as exc:
+        return False, str(exc)
 
 
 def _parse_env_value(raw: str) -> str:
@@ -646,6 +785,180 @@ def _known_wizard_keys() -> set[str]:
     return keys
 
 
+def _duplicate_env_keys(path: Path) -> list[str]:
+    if not path.exists():
+        return []
+    seen: set[str] = set()
+    duplicates: set[str] = set()
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        match = _ENV_ASSIGNMENT_RE.match(raw)
+        if not match:
+            continue
+        key = match.group(1)
+        if key in seen:
+            duplicates.add(key)
+            continue
+        seen.add(key)
+    return sorted(duplicates)
+
+
+def _allowlist_matches_any(entries: Sequence[str], candidates: Sequence[str]) -> bool:
+    for candidate in candidates:
+        for entry in entries:
+            if _allowlist_entry_matches(entry, candidate):
+                return True
+    return False
+
+
+def validate_wicap_env(
+    *,
+    repo_root: Path,
+    env_path: Path | None = None,
+    probe_live: bool = True,
+    require_live: bool = False,
+) -> dict[str, object]:
+    resolved_repo_root = Path(repo_root).expanduser()
+    if not resolved_repo_root.exists():
+        raise ValueError(f"WiCAP repo root does not exist: {resolved_repo_root}")
+
+    target_env_path = Path(env_path).expanduser() if env_path is not None else (resolved_repo_root / ".env")
+    entries = load_env_entries(target_env_path)
+    errors: list[str] = []
+    warnings: list[str] = []
+    checks: dict[str, object] = {}
+
+    if not target_env_path.exists():
+        errors.append(f".env file not found: {target_env_path}")
+        return {
+            "repo_root": str(resolved_repo_root),
+            "env_path": str(target_env_path),
+            "errors": errors,
+            "warnings": warnings,
+            "checks": checks,
+            "ok": False,
+        }
+
+    duplicate_keys = _duplicate_env_keys(target_env_path)
+    if duplicate_keys:
+        errors.append(f".env has duplicate keys: {', '.join(duplicate_keys)}")
+
+    required_keys = (
+        "WICAP_SQL_HOST",
+        "WICAP_SQL_DATABASE",
+        "WICAP_SQL_USER",
+        "WICAP_SQL_PASSWORD",
+        "WICAP_INTERNAL_SECRET",
+        "WICAP_REDIS_URL",
+        "WICAP_UI_URL",
+    )
+    missing_required = [key for key in required_keys if not str(entries.get(key, "")).strip()]
+    if missing_required:
+        errors.append(f"Missing required keys: {', '.join(missing_required)}")
+
+    if entries.get("WICAP_SQL_PASSWORD") and len(str(entries["WICAP_SQL_PASSWORD"])) < 12:
+        errors.append("WICAP_SQL_PASSWORD must be at least 12 characters.")
+    if entries.get("WICAP_INTERNAL_SECRET") and len(str(entries["WICAP_INTERNAL_SECRET"])) < 12:
+        errors.append("WICAP_INTERNAL_SECRET must be at least 12 characters.")
+
+    management_interface = _detect_management_interface()
+    management_ip = _detect_lan_ipv4(management_interface)
+    checks["management_interface"] = management_interface or ""
+    checks["management_ip"] = management_ip or ""
+
+    interface = str(entries.get("WICAP_INTERFACE", "")).strip()
+    allow_management = str(entries.get("WICAP_ALLOW_MANAGEMENT_INTERFACE", "false")).strip().lower() in _BOOL_TRUE
+    if (
+        interface
+        and interface.lower() != "auto"
+        and management_interface
+        and interface == management_interface
+        and not allow_management
+    ):
+        errors.append(
+            f"WICAP_INTERFACE={interface} matches management interface {management_interface}; "
+            "set a dedicated capture interface or explicitly enable WICAP_ALLOW_MANAGEMENT_INTERFACE=true."
+        )
+
+    allowlist_raw = str(entries.get("WICAP_INTERNAL_ALLOWLIST", ""))
+    normalized_allowlist, allowlist_warnings = _sanitize_allowlist(allowlist_raw, ensure_loopback=False)
+    allowlist_entries = _split_allowlist_entries(normalized_allowlist)
+    warnings.extend(allowlist_warnings)
+    checks["internal_allowlist"] = allowlist_entries
+    if not allowlist_entries:
+        errors.append("WICAP_INTERNAL_ALLOWLIST is empty.")
+
+    ui_url = str(entries.get("WICAP_UI_URL", "")).strip()
+    ui_host, ui_port, ui_parse_error = _parse_ui_url(ui_url)
+    if ui_parse_error:
+        errors.append(ui_parse_error)
+    else:
+        checks["ui_host"] = ui_host
+        checks["ui_port"] = ui_port
+        loopback_hosts = {"localhost", "127.0.0.1", "::1"}
+        if ui_host in loopback_hosts:
+            if not _allowlist_matches_any(allowlist_entries, ("127.0.0.1", "::1", "localhost")):
+                errors.append(
+                    "WICAP_UI_URL points to loopback, but WICAP_INTERNAL_ALLOWLIST does not allow loopback clients."
+                )
+        elif management_ip and not _allowlist_matches_any(allowlist_entries, (management_ip,)):
+            errors.append(
+                "WICAP_UI_URL uses non-loopback host, but WICAP_INTERNAL_ALLOWLIST does not include the "
+                f"management host IP {management_ip} (or containing CIDR)."
+            )
+
+    directory_keys = [
+        "WICAP_CAPTURES_DIR",
+        "WICAP_CAPTURE_DIR",
+        "WICAP_EVIDENCE_BUNDLE_DIR",
+    ]
+    if str(entries.get("WICAP_BT_ENABLED", "")).strip().lower() in _BOOL_TRUE:
+        directory_keys.append("WICAP_BT_CAPTURE_DIR")
+    for key in directory_keys:
+        raw_path = str(entries.get(key, "")).strip()
+        if not raw_path:
+            warnings.append(f"{key} is empty; path checks skipped.")
+            continue
+        resolved = _resolve_repo_relative(resolved_repo_root, raw_path)
+        if not resolved.exists():
+            warnings.append(f"{key} does not exist yet: {resolved}")
+            continue
+        if not os.access(resolved, os.W_OK):
+            warnings.append(f"{key} is not writable: {resolved}")
+
+    if probe_live and not ui_parse_error:
+        reachable, reason = _probe_tcp_reachability(ui_host, ui_port)
+        checks["ui_reachable"] = bool(reachable)
+        checks["ui_reachability_reason"] = reason
+        if not reachable:
+            message = f"UI reachability probe failed for {ui_host}:{ui_port}: {reason}"
+            if require_live:
+                errors.append(message)
+            else:
+                warnings.append(message)
+        else:
+            emit_ok, emit_reason = _probe_internal_emit(
+                ui_url,
+                secret=str(entries.get("WICAP_INTERNAL_SECRET", "")),
+            )
+            checks["internal_emit_ok"] = bool(emit_ok)
+            checks["internal_emit_reason"] = emit_reason
+            if not emit_ok:
+                message = f"Internal emit probe failed: {emit_reason}"
+                if require_live:
+                    errors.append(message)
+                else:
+                    warnings.append(message)
+
+    return {
+        "repo_root": str(resolved_repo_root),
+        "env_path": str(target_env_path),
+        "errors": errors,
+        "warnings": warnings,
+        "checks": checks,
+        "ok": not errors,
+    }
+
+
 def run_wicap_env_setup(
     *,
     repo_root: Path,
@@ -741,6 +1054,7 @@ def run_wicap_env_setup(
             "WICAP_INTERNAL_ALLOWLIST",
             "Internal allowlist (comma-separated IPs/CIDRs)",
             default=ENV_DEFAULTS["WICAP_INTERNAL_ALLOWLIST"],
+            normalizer=_normalize_allowlist,
         ),
         PromptField("WICAP_REDIS_URL", "Redis URL", default=ENV_DEFAULTS["WICAP_REDIS_URL"]),
     ]
@@ -752,6 +1066,12 @@ def run_wicap_env_setup(
             secret_input_fn=secret_input_fn,
             print_fn=print_fn,
         )
+
+    sanitized_allowlist, allowlist_warnings = _sanitize_allowlist(values["WICAP_INTERNAL_ALLOWLIST"])
+    values["WICAP_INTERNAL_ALLOWLIST"] = sanitized_allowlist
+    for warning in allowlist_warnings:
+        print_fn(f"WARNING: {warning}")
+        warnings.append(warning)
 
     # Write compatibility aliases exactly once.
     values["WICAP_SQL_SERVER"] = values["WICAP_SQL_HOST"]
@@ -771,11 +1091,23 @@ def run_wicap_env_setup(
     # B) Headless LAN UI + capture path mapping
     # ------------------------------------------------------------------
     print_fn("\n[Required B] Headless LAN UI and capture path mapping")
-    ui_host = lan_ip or hostname or "localhost"
     ui_port = compose_ui_plan.default_port
-    ui_default = f"http://{ui_host}:{ui_port}"
+    lan_host = lan_ip or hostname or "localhost"
+    lan_ui_url = f"http://{lan_host}:{ui_port}"
+    if compose_ui_plan.strategy == _UI_STRATEGY_HOST_NETWORK:
+        ui_default = f"http://127.0.0.1:{ui_port}"
+        print_fn(
+            "Host-network UI detected: defaulting WICAP_UI_URL to loopback for internal push safety. "
+            f"LAN dashboard URL is typically {lan_ui_url}."
+        )
+    else:
+        ui_default = lan_ui_url
     values["WICAP_UI_URL"] = _prompt_value(
-        PromptField("WICAP_UI_URL", "WiCAP UI base URL (LAN-reachable)", default=ui_default),
+        PromptField(
+            "WICAP_UI_URL",
+            "WiCAP internal UI URL for processor push target",
+            default=ui_default,
+        ),
         existing=existing,
         input_fn=input_fn,
         secret_input_fn=secret_input_fn,
@@ -1192,6 +1524,7 @@ def run_wicap_env_setup(
 
     print_fn("\nSetup summary:")
     print_fn(f"- UI strategy: {compose_ui_plan.strategy}")
+    print_fn(f"- LAN dashboard hint: {lan_ui_url}")
     print_fn(f"- Changed keys: {len(changed_keys)}")
     print_fn(f"- Optional sections skipped: {', '.join(skipped_sections) if skipped_sections else 'none'}")
     print_fn(f"- Warnings: {len(warnings)}")
@@ -1202,8 +1535,10 @@ def run_wicap_env_setup(
 
     next_commands = [
         f"cd {resolved_repo_root}",
-        "docker compose up -d --build",
+        "docker compose up -d --build redis processor ui",
         "docker compose ps",
+        "curl -fsS http://127.0.0.1:8080/health || true",
+        "docker compose up -d scout",
     ]
     print_fn("Next commands:")
     for command in next_commands:
@@ -1220,6 +1555,7 @@ def run_wicap_env_setup(
         "dry_run": dry_run,
         "backup_path": backup_path,
         "ui_bind_strategy": compose_ui_plan.strategy,
+        "lan_dashboard_url": lan_ui_url,
         "compose_override_path": str(compose_override_path) if compose_override_written else None,
         "next_commands": next_commands,
     }

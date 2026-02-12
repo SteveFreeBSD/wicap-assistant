@@ -70,7 +70,7 @@ wicap-assist setup-wicap-env --repo-root /opt/wicap
 ```
 The wizard now covers:
 - Required boot values (SQL + internal secret + Redis)
-- Headless LAN UI URL (`WICAP_UI_URL`) and capture directory mapping
+- Headless-safe internal UI target (`WICAP_UI_URL`, loopback default on host-network deploys) plus LAN access guidance
 - Safe Wi-Fi capture selection with management-interface protection (`wlo1` exclusion by default)
 - Bluetooth sniffer wiring from `/dev/serial/by-id` when enabled
 - Optional queue/dwell/OTLP tuning
@@ -83,9 +83,12 @@ It also supports:
 Recommended first-run sequence on a new server:
 ```bash
 wicap-assist setup-wicap-env --repo-root /opt/wicap
+wicap-assist validate-wicap-env --repo-root /opt/wicap
 cd /opt/wicap
-docker compose up -d --build
+docker compose up -d --build redis processor ui
 docker compose ps
+curl -fsS http://127.0.0.1:8080/health || true
+docker compose up -d scout
 ```
 
 ## Live Control Quickstart
@@ -205,6 +208,7 @@ Data is stored in `./data/assistant.db`.
 ## Command Reference
 - `wicap-assist ingest [--scan-codex] [--scan-soaks] [--scan-harness] [--scan-network-events] [--scan-antigravity] [--scan-changelog]`
 - `wicap-assist setup-wicap-env [--repo-root <path>] [--env-file <file>] [--yes] [--dry-run] [--no-backup]`
+- `wicap-assist validate-wicap-env [--repo-root <path>] [--env-file <file>] [--no-live-probe] [--require-live] [--json]`
 - `wicap-assist triage "<query>"`
 - `wicap-assist bundle <target> [--json]`
 - `wicap-assist incident <target> [--json-input <file>] [--overwrite]`
