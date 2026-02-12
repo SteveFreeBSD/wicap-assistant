@@ -301,11 +301,13 @@ else
 fi
 
 FINAL_GATE_STEP="rollout_gates_pass2"
+FINAL_AUTOPILOT_STEP="autopilot_once"
 if [[ "${STRICT}" -eq 1 ]]; then
     gate_rc="$(latest_step_rc "${FINAL_GATE_STEP}")"
     if [[ -n "${gate_rc}" && "${gate_rc}" -ne 0 && "${MAX_GATE_RETRIES}" -gt 0 ]]; then
         for retry in $(seq 1 "${MAX_GATE_RETRIES}"); do
-            run_json_step "autopilot_retry${retry}" bash -lc "cd \"${ASSIST_ROOT}\" && PYTHONPATH=src python3 -m wicap_assist.cli --db \"${ASSIST_DB}\" autopilot --control-mode \"${AUTOPILOT_MODE}\" --operate-cycles \"${OPERATE_CYCLES}\" --stop-on-escalation --no-rollback-on-verify-failure --max-runs 1 --json" || true
+            FINAL_AUTOPILOT_STEP="autopilot_retry${retry}"
+            run_json_step "${FINAL_AUTOPILOT_STEP}" bash -lc "cd \"${ASSIST_ROOT}\" && PYTHONPATH=src python3 -m wicap_assist.cli --db \"${ASSIST_DB}\" autopilot --control-mode \"${AUTOPILOT_MODE}\" --operate-cycles \"${OPERATE_CYCLES}\" --stop-on-escalation --no-rollback-on-verify-failure --max-runs 1 --json" || true
             FINAL_GATE_STEP="rollout_gates_retry${retry}"
             run_json_step "${FINAL_GATE_STEP}" bash -lc "cd \"${ASSIST_ROOT}\" && PYTHONPATH=src python3 -m wicap_assist.cli --db \"${ASSIST_DB}\" rollout-gates --enforce --json" || true
             gate_rc="$(latest_step_rc "${FINAL_GATE_STEP}")"
@@ -381,7 +383,7 @@ record_step "db_snapshot" "0"
 echo "[pass] db_snapshot"
 
 echo "[step] building sweep summary"
-python3 - "${RUN_DIR}" "${STEP_FILE}" "${FINAL_GATE_STEP}" > "${RUN_DIR}/summary.json" <<'PY'
+python3 - "${RUN_DIR}" "${STEP_FILE}" "${FINAL_GATE_STEP}" "${FINAL_AUTOPILOT_STEP}" > "${RUN_DIR}/summary.json" <<'PY'
 import json
 import pathlib
 import sys
@@ -389,6 +391,7 @@ import sys
 run_dir = pathlib.Path(sys.argv[1])
 step_file = pathlib.Path(sys.argv[2])
 final_gate_step = str(sys.argv[3])
+final_autopilot_step = str(sys.argv[4])
 steps = []
 for raw in step_file.read_text(encoding="utf-8").splitlines():
     line = raw.strip()
@@ -406,7 +409,7 @@ def load_json(name: str):
     except json.JSONDecodeError:
         return None
 
-autopilot = load_json("autopilot_once")
+autopilot = load_json(final_autopilot_step)
 rollout = load_json(final_gate_step)
 contract = load_json("contract_check")
 db_snapshot = load_json("db_snapshot")
@@ -424,6 +427,7 @@ if isinstance(autopilot, dict):
 
 summary = {
     "run_dir": str(run_dir),
+    "final_autopilot_step": final_autopilot_step,
     "final_gate_step": final_gate_step,
     "step_results": steps,
     "step_failures": [item["step"] for item in steps if int(item["rc"]) != 0],
@@ -460,7 +464,7 @@ python3 -m json.tool "${RUN_DIR}/summary.json"
 record_step "summary" "0"
 
 critical_fail=0
-for step_name in bootstrap core_reconcile autopilot_once "${FINAL_GATE_STEP}" contract_check autopilot_service_start db_snapshot summary; do
+for step_name in bootstrap core_reconcile "${FINAL_GATE_STEP}" contract_check autopilot_service_start db_snapshot summary; do
     step_rc="$(awk -F '\t' -v name="${step_name}" '$1==name {print $2}' "${STEP_FILE}" | tail -n1)"
     if [[ -n "${step_rc}" && "${step_rc}" -ne 0 ]]; then
         critical_fail=1
@@ -470,7 +474,7 @@ done
 echo "[done] comprehensive sweep artifacts: ${RUN_DIR}"
 if [[ "${STRICT}" -eq 1 && "${critical_fail}" -ne 0 ]]; then
     echo "[error] strict critical step failures:"
-    for step_name in bootstrap core_reconcile autopilot_once "${FINAL_GATE_STEP}" contract_check autopilot_service_start db_snapshot summary; do
+    for step_name in bootstrap core_reconcile "${FINAL_GATE_STEP}" contract_check autopilot_service_start db_snapshot summary; do
         step_rc="$(latest_step_rc "${step_name}")"
         if [[ -n "${step_rc}" && "${step_rc}" -ne 0 ]]; then
             echo "  - ${step_name}: rc=${step_rc}"

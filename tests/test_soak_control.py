@@ -318,3 +318,44 @@ def test_control_policy_emits_health_probe_on_stable_cycle(tmp_path: Path) -> No
     assert probe is not None
     assert str(probe.get("action")) == "status_check"
     assert any("check_wicap_status.py" in " ".join(cmd) or "scripts.check_wicap_status" in " ".join(cmd) for cmd in calls)
+
+
+def test_control_policy_ignores_scout_down_for_health_state(tmp_path: Path) -> None:
+    repo = tmp_path / "wicap"
+    script = repo / "check_wicap_status.py"
+    script.parent.mkdir(parents=True)
+    script.write_text("print('ok')\n", encoding="utf-8")
+
+    calls: list[list[str]] = []
+
+    def ok_runner(cmd, cwd, capture_output, text, check, timeout):  # type: ignore[no-untyped-def]
+        calls.append(list(cmd))
+        return _DummyResult(0, stdout="ok\n")
+
+    policy = ControlPolicy(
+        mode="autonomous",
+        repo_root=repo,
+        runner=ok_runner,
+        check_threshold=2,
+        recover_threshold=3,
+        health_probe_interval_cycles=1,
+    )
+
+    observation = {
+        "ts": "2026-02-11T00:00:00+00:00",
+        "service_status": {
+            "docker": {
+                "services": {
+                    "wicap-ui": {"state": "up", "status": "Up 2m"},
+                    "wicap-processor": {"state": "up", "status": "Up 2m"},
+                    "wicap-scout": {"state": "down", "status": "not running"},
+                }
+            }
+        },
+    }
+
+    events = policy.process_observation(observation)
+    health = next((event for event in events if str(event.get("decision")) == "service_health"), None)
+    assert health is not None
+    assert str(health.get("status")) == "stable"
+    assert any(str(event.get("decision")) == "health_probe" for event in events)

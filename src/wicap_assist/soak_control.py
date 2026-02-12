@@ -17,6 +17,7 @@ from wicap_assist.util.time import utc_now_iso
 ControlRunner = Callable[..., subprocess.CompletedProcess[str]]
 _AUTONOMOUS_KILL_SWITCH_FILE = ".wicap_assist_autonomous.kill"
 _KILL_SWITCH_TRUE_VALUES = {"1", "true", "yes", "on"}
+_DEFAULT_IGNORED_DOWN_SERVICES = ("wicap-scout",)
 
 
 def _status_check_available(repo_root: Path) -> bool:
@@ -188,11 +189,13 @@ class ControlPolicy:
     rollback_enabled: bool | None = None
     rollback_actions: tuple[str, ...] | None = None
     rollback_max_attempts: int | None = None
+    ignored_down_services: tuple[str, ...] | None = None
     profile_name: str = field(default="", init=False)
     _service_state: dict[str, dict[str, int]] = field(default_factory=dict, init=False)
     _anomaly_state: dict[str, int] = field(default_factory=dict, init=False)
     _cycle: int = field(default=0, init=False)
     _status_check_available: bool = field(default=False, init=False)
+    _ignored_down_services: set[str] = field(default_factory=set, init=False)
 
     def __post_init__(self) -> None:
         self.mode = str(self.mode).strip().lower()
@@ -235,6 +238,14 @@ class ControlPolicy:
         self.rollback_actions = tuple(str(item) for item in profile["rollback_actions"])
         self.rollback_max_attempts = int(profile["rollback_max_attempts"])
         self._status_check_available = _status_check_available(self.repo_root)
+        if self.ignored_down_services is None:
+            self._ignored_down_services = {str(name).strip() for name in _DEFAULT_IGNORED_DOWN_SERVICES if str(name).strip()}
+        else:
+            self._ignored_down_services = {
+                str(name).strip()
+                for name in self.ignored_down_services
+                if str(name).strip()
+            }
 
         normalized: dict[str, dict[str, int]] = {}
         source = self.service_ladders or _default_service_ladders(
@@ -428,8 +439,13 @@ class ControlPolicy:
             for service_name, info in services.items():
                 if not isinstance(info, dict):
                     continue
+                normalized_service_name = str(service_name).strip()
+                if not normalized_service_name:
+                    continue
+                if normalized_service_name in self._ignored_down_services:
+                    continue
                 if str(info.get("state", "unknown")) != "up":
-                    down_services.append(str(service_name))
+                    down_services.append(normalized_service_name)
 
         down_set = set(down_services)
         for service_name in sorted(self._service_state):
@@ -485,6 +501,7 @@ class ControlPolicy:
                 "status": "down_detected" if down_services else "stable",
                 "detail_json": {
                     "down_services": sorted(down_services),
+                    "ignored_down_services": sorted(self._ignored_down_services),
                     "max_down_streak": int(max_streak),
                     "cycle": int(self._cycle),
                     "mode": self.mode,
