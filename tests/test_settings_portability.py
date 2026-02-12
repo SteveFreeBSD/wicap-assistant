@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import wicap_assist.settings as settings
 from wicap_assist.extract.signals import session_gate
+from wicap_assist.ingest.antigravity_logs import antigravity_root
 from wicap_assist.ingest.codex_jsonl import scan_codex_paths
 from wicap_assist.settings import codex_home, repo_url_matches_wicap, wicap_repo_root
 
@@ -31,3 +33,23 @@ def test_repo_url_hint_override_controls_session_gate(monkeypatch) -> None:
 def test_wicap_repo_root_env_override(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("WICAP_REPO_ROOT", str(tmp_path / "wicap-alt"))
     assert wicap_repo_root() == (tmp_path / "wicap-alt")
+
+
+def test_wicap_repo_root_auto_discovers_sibling_repo(monkeypatch, tmp_path: Path) -> None:
+    stack_root = tmp_path / "stack"
+    assistant_root = stack_root / "wicap-assistant"
+    repo_root = stack_root / "wicap"
+    assistant_root.mkdir(parents=True, exist_ok=True)
+    repo_root.mkdir(parents=True, exist_ok=True)
+    (repo_root / "docker-compose.yml").write_text("services:\n", encoding="utf-8")
+
+    monkeypatch.delenv("WICAP_REPO_ROOT", raising=False)
+    monkeypatch.setattr(settings, "_DEFAULT_CONTAINER_WICAP_ROOT", tmp_path / "missing-container")
+    monkeypatch.chdir(assistant_root)
+    assert wicap_repo_root() == repo_root
+
+
+def test_antigravity_root_env_override(monkeypatch, tmp_path: Path) -> None:
+    custom = tmp_path / "antigravity-root"
+    monkeypatch.setenv("WICAP_ASSIST_ANTIGRAVITY_ROOT", str(custom))
+    assert antigravity_root() == custom

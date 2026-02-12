@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import json
+import os
 from pathlib import Path
 import re
 import sqlite3
@@ -19,9 +20,10 @@ from wicap_assist.db import (
     upsert_source,
 )
 from wicap_assist.extract.signals import extract_operational_signals
+from wicap_assist.settings import codex_home
 from wicap_assist.util.redact import sha1_text, to_snippet
 
-ANTIGRAVITY_ROOT = Path.home() / ".gemini" / "antigravity" / "brain"
+_DEFAULT_ANTIGRAVITY_ROOT = Path.home() / ".gemini" / "antigravity" / "brain"
 
 _ARTIFACT_NAMES = ("task.md", "walkthrough.md", "implementation_plan.md")
 _METADATA_SUFFIX = ".metadata.json"
@@ -85,13 +87,30 @@ class ParsedConversation:
     verification_outcomes: list[VerificationOutcome] = field(default_factory=list)
 
 
-def scan_antigravity_paths(root: Path = ANTIGRAVITY_ROOT) -> list[Path]:
+def antigravity_root() -> Path:
+    """Resolve antigravity artifact root from env with portable defaults."""
+    explicit = os.environ.get("WICAP_ASSIST_ANTIGRAVITY_ROOT", "").strip()
+    if explicit:
+        return Path(explicit).expanduser()
+
+    legacy = os.environ.get("ANTIGRAVITY_ROOT", "").strip()
+    if legacy:
+        return Path(legacy).expanduser()
+
+    codex_based = codex_home() / "antigravity" / "brain"
+    if codex_based.exists():
+        return codex_based
+    return _DEFAULT_ANTIGRAVITY_ROOT
+
+
+def scan_antigravity_paths(root: Path | None = None) -> list[Path]:
     """List conversation directories containing at least one markdown artifact."""
-    if not root.is_dir():
+    resolved_root = root if root is not None else antigravity_root()
+    if not resolved_root.is_dir():
         return []
 
     results: list[Path] = []
-    for child in sorted(root.iterdir()):
+    for child in sorted(resolved_root.iterdir()):
         if not child.is_dir():
             continue
         if not _UUID_RE.match(child.name):
@@ -442,7 +461,7 @@ def _dir_mtime_and_size(conv_dir: Path) -> tuple[float, int]:
 
 def ingest_antigravity_logs(
     conn: sqlite3.Connection,
-    root: Path = ANTIGRAVITY_ROOT,
+    root: Path | None = None,
 ) -> tuple[int, int, int, int]:
     """Ingest Antigravity conversation artifacts.
 

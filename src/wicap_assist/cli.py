@@ -657,7 +657,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--repo-root",
         type=Path,
         default=None,
-        help="Override WiCAP repo root (default: WICAP_REPO_ROOT or ~/apps/wicap)",
+        help="Override WiCAP repo root (default: WICAP_REPO_ROOT or auto-discovered /wicap, ../wicap, ~/apps/wicap)",
     )
     setup_env_parser.add_argument(
         "--env-file",

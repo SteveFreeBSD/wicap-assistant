@@ -45,8 +45,9 @@ The assistant follows a deterministic sense-decide-act loop:
 - No network required for ingest/recommend/report workflows
 
 ## Key Configuration
-- `WICAP_REPO_ROOT`: override the WiCAP repo path (default: `~/apps/wicap`).
+- `WICAP_REPO_ROOT`: override WiCAP repo path (auto-discovery order: `/wicap`, `./wicap`, `../wicap`, then `~/apps/wicap`).
 - `CODEX_HOME`: override Codex artifact root (default: `~/.codex`).
+- `WICAP_ASSIST_ANTIGRAVITY_ROOT`: override Antigravity ingest root (fallback: `ANTIGRAVITY_ROOT`, then `<CODEX_HOME>/antigravity/brain`, then `~/.gemini/antigravity/brain`).
 - `WICAP_ASSIST_OTLP_PROFILE`: telemetry export profile (`disabled`, `self_hosted`, `vendor`, `cloud`).
 - `WICAP_ASSIST_OTLP_HTTP_ENDPOINT`: OTLP HTTP endpoint for control-loop telemetry export.
 - `WICAP_ASSIST_OTLP_HEADERS`: optional OTLP headers (`k=v,k2=v2` or JSON object).
