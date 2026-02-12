@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -122,6 +124,16 @@ def _write_json(path: Path, payload: dict[str, Any]) -> Path:
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
     return target
+
+
+def _run_live_runner_quiet(
+    live_runner: Callable[..., int],
+    *args: Any,
+    **kwargs: Any,
+) -> int:
+    """Invoke the live runner while suppressing stdout chatter for supervisor flows."""
+    with contextlib.redirect_stdout(io.StringIO()):
+        return int(live_runner(*args, **kwargs))
 
 
 def _phase_start(
@@ -324,7 +336,8 @@ def run_autopilot_supervisor(
                         startup_ok = False
                         break
 
-            start_live_rc = live_runner(
+            start_live_rc = _run_live_runner_quiet(
+                live_runner,
                 conn,
                 interval=max(0.1, float(operate_interval_seconds)),
                 once=True,
@@ -370,7 +383,8 @@ def run_autopilot_supervisor(
             operation_rows: list[dict[str, Any]] = []
             operate_ok = True
             for _ in range(max(1, int(operate_cycles))):
-                rc = live_runner(
+                rc = _run_live_runner_quiet(
+                    live_runner,
                     conn,
                     interval=max(0.1, float(operate_interval_seconds)),
                     once=True,

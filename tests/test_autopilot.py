@@ -211,3 +211,44 @@ def test_autopilot_requires_scout_when_flag_enabled(tmp_path: Path, monkeypatch)
     assert report["latest"]["status"] == "failed_preflight"
     assert report["latest"]["phase_results"][0]["status"] == "fail"
     conn.close()
+
+
+def test_autopilot_suppresses_live_runner_stdout(tmp_path: Path, monkeypatch, capsys) -> None:
+    db_path = tmp_path / "assistant.db"
+    conn = connect_db(db_path)
+    repo_root = tmp_path / "wicap"
+    repo_root.mkdir(parents=True, exist_ok=True)
+    (repo_root / "docker-compose.yml").write_text("services: {}\n", encoding="utf-8")
+
+    monkeypatch.setattr("wicap_assist.autopilot.shutil.which", lambda _name: "/usr/bin/fake")
+    monkeypatch.setattr(
+        "wicap_assist.autopilot.run_allowlisted_action",
+        lambda **kwargs: ActuatorResult(status="executed_ok", commands=[], detail="ok", policy_trace={}),  # type: ignore[no-untyped-def]
+    )
+
+    def noisy_live_runner(*args, **kwargs):  # type: ignore[no-untyped-def]
+        _ = args
+        _ = kwargs
+        print("noisy-live-output")
+        return 0
+
+    report = run_autopilot_supervisor(
+        conn,
+        mode="assist",
+        repo_root=repo_root,
+        require_runtime_contract=True,
+        perform_startup=False,
+        operate_cycles=1,
+        operate_interval_seconds=0.1,
+        required_consecutive_passes=1,
+        gate_history_file=tmp_path / "rollout_history.jsonl",
+        report_path=tmp_path / "autopilot_latest.json",
+        max_runs=1,
+        live_runner=noisy_live_runner,
+        contract_runner=lambda **kwargs: {"status": "pass", "checks": []},  # type: ignore[no-untyped-def]
+        rollout_runner=lambda _conn: {"overall_pass": True, "generated_ts": "2026-02-12T00:00:00Z", "gates": {}},  # type: ignore[no-untyped-def]
+    )
+
+    assert report["latest"]["status"] in {"hold", "promoted"}
+    assert capsys.readouterr().out == ""
+    conn.close()
