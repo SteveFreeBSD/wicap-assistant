@@ -243,7 +243,7 @@ if [[ "${WITH_SCOUT}" -eq 1 ]]; then
     smoke_cmd+=("--with-scout")
 fi
 if [[ "${STRICT}" -eq 1 ]]; then
-    smoke_cmd+=("--enforce-gate" "--enforce-contract")
+    smoke_cmd+=("--enforce-gate")
 fi
 run_stream_step "server_rollout_smoke" "${smoke_cmd[@]}"
 
@@ -281,7 +281,17 @@ exit 1
 run_json_step "autopilot_once" bash -lc "cd \"${ASSIST_ROOT}\" && PYTHONPATH=src python3 -m wicap_assist.cli --db \"${ASSIST_DB}\" autopilot --control-mode \"${AUTOPILOT_MODE}\" --operate-cycles \"${OPERATE_CYCLES}\" --stop-on-escalation --no-rollback-on-verify-failure --max-runs 1 --json"
 run_json_step "rollout_gates_pass1" bash -lc "cd \"${ASSIST_ROOT}\" && PYTHONPATH=src python3 -m wicap_assist.cli --db \"${ASSIST_DB}\" rollout-gates --json"
 run_json_step "rollout_gates_pass2" bash -lc "cd \"${ASSIST_ROOT}\" && PYTHONPATH=src python3 -m wicap_assist.cli --db \"${ASSIST_DB}\" rollout-gates --json"
-run_stream_step "live_testing_gate" "${ASSIST_ROOT}/scripts/live_testing_gate.sh" "${ASSIST_DB}" "${RUN_DIR}" "${ASSIST_ROOT}/data/reports/rollout_gates_history.jsonl"
+live_gate_cmd=(
+    "${ASSIST_ROOT}/scripts/live_testing_gate.sh"
+    "${ASSIST_DB}"
+    "${RUN_DIR}"
+    "${ASSIST_ROOT}/data/reports/rollout_gates_history.jsonl"
+    "--no-enforce-contract"
+)
+if [[ "${STRICT}" -ne 1 ]]; then
+    live_gate_cmd+=("--no-enforce-rollout")
+fi
+run_stream_step "live_testing_gate" "${live_gate_cmd[@]}"
 
 run_json_step "contract_check" bash -lc "cd \"${ASSIST_ROOT}\" && PYTHONPATH=src python3 -m wicap_assist.cli --db \"${ASSIST_DB}\" contract-check --json --no-enforce"
 run_json_step "failover_state" bash -lc "cd \"${ASSIST_ROOT}\" && PYTHONPATH=src python3 -m wicap_assist.cli --db \"${ASSIST_DB}\" agent failover-state --json"

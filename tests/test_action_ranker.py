@@ -158,3 +158,35 @@ def test_rank_allowlisted_actions_counts_health_probe_for_shadow_gate(
         assert int(shadow_gate["samples"]) >= 1
     finally:
         conn.close()
+
+
+def test_rank_allowlisted_actions_shadow_gate_can_reach_rollout_sample_floor(tmp_path: Path) -> None:
+    conn = connect_db(tmp_path / "assistant.db")
+    try:
+        for idx in range(260):
+            insert_decision_feature(
+                conn,
+                control_session_id=None,
+                soak_run_id=None,
+                episode_id=None,
+                ts=f"2026-02-11T01:{idx // 60:02d}:{idx % 60:02d}+00:00",
+                mode="autonomous",
+                policy_profile="autonomous-v1",
+                decision="health_probe",
+                action="status_check",
+                status="executed_ok",
+                feature_json={"shadow_ranker_top_action": "status_check"},
+            )
+        conn.commit()
+
+        ranked = rank_allowlisted_actions(
+            conn,
+            observation=_observation_with_down_redis(),
+            mode="autonomous",
+            policy_profile="autonomous-v1",
+            top_n=3,
+        )
+        shadow_gate = ranked["shadow_gate"]
+        assert int(shadow_gate["samples"]) >= 200
+    finally:
+        conn.close()

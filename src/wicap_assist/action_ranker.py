@@ -10,7 +10,7 @@ from typing import Any, Mapping
 from wicap_assist.actuators import ALLOWED_RESTART_SERVICES
 
 _BASE_ACTIONS = ("status_check", "compose_up_core", "shutdown")
-_DEFAULT_SHADOW_GATE_WINDOW = 160
+_DEFAULT_SHADOW_GATE_WINDOW = 320
 _DEFAULT_SHADOW_GATE_MIN_SAMPLES = 20
 _DEFAULT_SHADOW_GATE_MIN_AGREEMENT = 0.7
 _DEFAULT_SHADOW_GATE_MIN_SUCCESS = 0.6
